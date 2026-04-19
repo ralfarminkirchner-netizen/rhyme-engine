@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Data — große Wortlisten und Pickle-Cache nicht ins Repo
+app/data/*.txt
+app/data/*.csv
+app/data/*.zip
+app/data/_leipzig_tmp/
+cache/
+
+# Halte nur das Beispiel-Stub fest
+!app/data/.gitkeep
+!cache/.gitkeep
+
+# Node / Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
