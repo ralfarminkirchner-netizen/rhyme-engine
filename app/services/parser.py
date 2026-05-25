@@ -18,56 +18,6 @@ VOICELESS_FINAL: dict[str, str] = {
 
 UNSTRESSED_PREFIXES = {"be", "ge", "ver", "zer", "ent", "emp", "er"}
 
-# ── v → /v/ statt /f/ — Fremdwort-Lexikon ───────────────────────────────────
-# Default: v → /f/ (Vater, Volk, vier, viel, von, vor).
-# Ausnahmen: Lehnwörter mit /v/-Aussprache.
-# Strategie: vollständiges Wort-Lookup + Präfix-Whitelist für produktive Muster.
-# Mittelfristig: größere Wortliste oder Override-Feld in Datenbankeinträgen.
-
-# Vollständige Wörter die v = /v/ sprechen
-V_WORDS: frozenset[str] = frozenset({
-    # Klassische Lehnwörter
-    "vase", "vanille", "villa", "virus", "visum", "violin", "viola",
-    "vitamine", "vitamin", "video", "visa", "venus", "version",
-    "vision", "vakuum", "vakanz", "vamp", "van", "veto",
-    # Adjektiv-Endungen auf -iv, -ativ, -ativ (produktives Muster)
-    "aktiv", "passiv", "relativ", "motiv", "progressiv", "intensiv",
-    "kreativ", "kollektiv", "subjektiv", "objektiv", "negativ", "positiv",
-    "sensitiv", "intuitiv", "primitiv", "reaktiv", "operativ",
-    "naiv", "kursiv",
-    # November/Revolution/Universität etc.
-    "november", "revolte", "revolution", "evolution", "intervention",
-    "innovation", "motivation", "derivat", "derivation",
-    "universum", "universität", "universal",
-    # Eigennamen (häufig)
-    "viktor", "viviane", "viola", "virginia", "victoria", "vincent",
-    "valentina", "valeria",
-})
-
-# Wort-Präfixe die /v/ indizieren (für Wörter die nicht im Lexikon stehen)
-V_PREFIXES: tuple[str, ...] = (
-    "viol",   # Violin, Viola, Violett
-    "virus",  # Virus, Virusinfekt
-    "vide",   # Video, Videokassette
-    "vita",   # Vitamin, vital
-    "vakuu",  # Vakuum
-)
-
-def _v_to_phoneme(word_lower: str) -> str:
-    """Gibt /v/ oder /f/ für <v> zurück, abhängig vom Gesamtwort.
-
-    Heuristik v1 — bewusst konservativ:
-    - Vollständiges Wort im V_WORDS-Lexikon → /v/
-    - Wort beginnt mit V_PREFIXES → /v/
-    - Sonst: /f/ (Standarddeutsch-Default)
-    """
-    if word_lower in V_WORDS:
-        return "v"
-    for prefix in V_PREFIXES:
-        if word_lower.startswith(prefix):
-            return "v"
-    return "f"
-
 ALLOWED_ONSETS = {
     "p l", "p r", "b l", "b r", "d r", "f l", "f r",
     "g l", "g r", "k l", "k r", "t r",
@@ -170,7 +120,7 @@ def graphemes_to_phonemes(word: str) -> List[str]:
         if rest == "e":                               out.append("ə");  i+=1; continue
 
         c = w[i]
-        # Einzelbuchstaben → IPA (Python 3.9-kompatibel, kein match/case)
+        # Py3.9-kompatibler if/elif statt match — Verhalten 1:1
         if   c == "a": out.append("a")
         elif c == "e": out.append("ɛ")
         elif c == "i": out.append("ɪ")
@@ -178,12 +128,13 @@ def graphemes_to_phonemes(word: str) -> List[str]:
         elif c == "u": out.append("ʊ")
         elif c == "ä": out.append("ɛ")
         elif c == "ö": out.append("œ")
-        elif c in ("ü","y"): out.append("ʏ")
+        elif c == "ü": out.append("ʏ")
+        elif c == "y": out.append("ʏ")
         elif c == "b": out.append("b")
         elif c == "d": out.append("d")
         elif c == "f": out.append("f")
         elif c == "g": out.append("g")
-        elif c == "h": pass             # Dehnungs-h / stummes h
+        elif c == "h": pass          # Dehnungs-h
         elif c == "j": out.append("j")
         elif c == "k": out.append("k")
         elif c == "l": out.append("l")
@@ -194,7 +145,7 @@ def graphemes_to_phonemes(word: str) -> List[str]:
         elif c == "s": out.append(_choose_s(w, i))
         elif c == "ß": out.append("s")
         elif c == "t": out.append("t")
-        elif c == "v": out.append(_v_to_phoneme(w))
+        elif c == "v": out.append("f")
         elif c == "w": out.append("v")
         elif c == "x": out.extend(["k","s"])
         elif c == "z": out.append("t͡s")

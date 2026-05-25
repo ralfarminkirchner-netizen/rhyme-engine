@@ -51,3 +51,58 @@ async def search(request: SearchRequest):
         )
     except Exception as e:
         raise HTTPException(400, str(e))
+
+
+# ── Phrase Scorer Endpoint ────────────────────────────────────────────────────
+
+from pydantic import BaseModel
+from typing import List
+
+class PhraseRankRequest(BaseModel):
+    query: str
+    candidates: List[str]
+
+class PhraseRankResult(BaseModel):
+    phrase: str
+    score: float
+    anchor: float
+    tail: float
+    vowel: float
+    cadence: float
+    anchor_gated: bool
+    suffix_penalized: bool
+    reason: str
+
+class PhraseRankResponse(BaseModel):
+    query: str
+    ranked: List[PhraseRankResult]
+
+
+@router.post("/rank-phrases", response_model=PhraseRankResponse)
+async def rank_phrases(request: PhraseRankRequest):
+    """
+    Rankt Kandidaten-Phrasen als Reime zur Query-Phrase.
+    Nutzt End-Anker-basierten Scorer (keine globale Vokal-Ähnlichkeit).
+    """
+    try:
+        from app.services.phrase_scorer import rank_rhymes
+        ranked = rank_rhymes(request.query, request.candidates)
+        return PhraseRankResponse(
+            query=request.query,
+            ranked=[
+                PhraseRankResult(
+                    phrase=r.phrase,
+                    score=r.total,
+                    anchor=r.anchor,
+                    tail=r.tail,
+                    vowel=r.vowel,
+                    cadence=r.cadence,
+                    anchor_gated=r.anchor_gated,
+                    suffix_penalized=r.suffix_penalized,
+                    reason=r.reason,
+                )
+                for r in ranked
+            ],
+        )
+    except Exception as e:
+        raise HTTPException(400, str(e))

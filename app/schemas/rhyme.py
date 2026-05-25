@@ -18,7 +18,6 @@ class Mode(str, Enum):
     BALANCED = "balanced"
     DIRTY = "dirty"
     MULTISYLLABIC = "multisyllabic"
-    KOMPOSITA = "komposita"
     HARDCORE = "hardcore"
     END_RHYME = "endRhyme"
 

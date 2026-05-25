@@ -43,26 +43,3 @@ def test_lieb_auslautverhaertung():
 def test_besser_r_vokalisierung():
     r = parse_german_word("besser")
     assert "ɐ" in r.phonetic
-
-# ── v → /f/ vs. /v/ ────────────────────────────────────────────────────────────
-
-def test_v_native_ist_f():
-    """Einheimische v-Wörter: v → /f/ (Standarddeutsch-Default)."""
-    for w in ["vater", "volk", "vier", "viel", "von", "vor", "voll"]:
-        r = parse_german_word(w)
-        assert "f" in r.phonetic, f"{w}: erwartet /f/, bekam {r.phonetic}"
-        assert "v" not in r.phonetic or r.phonetic == ["k","v"], \
-            f"{w}: /v/ sollte nicht auftauchen, bekam {r.phonetic}"
-
-def test_v_fremdwort_ist_v():
-    """Fremdwörter aus V_WORDS: v → /v/ (nicht wortfinal, daher kein Auslautverhärtung)."""
-    # aktiv/passiv: finales v → /f/ per Auslautverhärtung — korrekt, kein Testfall hier.
-    # Nur Wörter wo v NICHT wortfinal ist:
-    for w in ["vase", "virus"]:
-        r = parse_german_word(w)
-        assert "v" in r.phonetic, f"{w}: erwartet /v/, bekam {r.phonetic}"
-
-def test_aktiv_auslautverhaertung():
-    """aktiv: finales v → /f/ per Auslautverhärtung (trotz Fremdwort)."""
-    r = parse_german_word("aktiv")
-    assert r.phonetic[-1] == "f", f"erwartet /f/, bekam {r.phonetic[-1]}"

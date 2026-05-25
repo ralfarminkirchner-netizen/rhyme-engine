@@ -25,12 +25,6 @@ PRESETS: dict[Mode, ModePreset] = {
         thresholds=Thresholds(maxSyllableDelta=1, maxStressDistance=1, maxVowelDistance=0.30, minTailSimilarity=0.62),
         defaultWeights=RawWeights(stress=0.30, vowelCore=0.30, tail=0.30, syllableFlex=0.10),
     ),
-    Mode.KOMPOSITA: ModePreset(
-        description="Lockerer Modus für Komposita und komplexe Mehrsilber",
-        target=FeatureTarget.RHYME,
-        thresholds=Thresholds(maxSyllableDelta=2, maxStressDistance=1, maxVowelDistance=0.45, minTailSimilarity=0.55),
-        defaultWeights=RawWeights(stress=0.25, vowelCore=0.40, tail=0.25, syllableFlex=0.10),
-    ),
     Mode.HARDCORE: ModePreset(
         description="Maximale Präzision: nur nahezu identische Ausklänge",
         target=FeatureTarget.RHYME,

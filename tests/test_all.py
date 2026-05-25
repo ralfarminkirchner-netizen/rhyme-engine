@@ -5,7 +5,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from app.services.phonological_distance import tail_similarity, phoneme_similarity
 from app.services.parser import parse_german_word
 from app.services.rhyme_engine import RhymeEngine
-from app.services.presets import get_preset
 from app.schemas.rhyme import Mode, RawWeights
 
 
@@ -42,13 +41,8 @@ def test_sein_schein_perfect():
 
 @pytest.fixture
 def engine():
-    words = [
-        "sein", "schein", "allein", "bewusstsein", "Licht", "dicht", "Bach", "Fach",
-        "Haus", "Maus", "lieb", "gut", "Hut", "Zeit", "weit",
-        # Komposita-Kandidaten für komposita-Mode-Tests
-        "bewusstseins", "bewußtsein", "berufszweigen", "besuchszeiten",
-        "risikopatient", "intensivpatient", "hocheffizient", "ineffizient",
-    ]
+    words = ["sein","schein","allein","bewusstsein","Licht","dicht","Bach","Fach",
+             "Haus","Maus","lieb","gut","Hut","Zeit","weit"]
     return RhymeEngine([parse_german_word(w) for w in words])
 
 def test_no_self_match(engine):
@@ -158,51 +152,3 @@ def test_analyze_empty(client):
 def test_search_invalid_mode(client):
     r = client.post("/api/rhymes/search", json={"query": "sein", "mode": "invalid"})
     assert r.status_code == 422
-
-
-# ── Komposita-Preset ──────────────────────────────────────────────────────────
-
-def test_komposita_preset_exists():
-    preset = get_preset(Mode.KOMPOSITA)
-    assert preset.target.value == "rhyme"
-    assert preset.thresholds.maxSyllableDelta == 2
-    assert preset.thresholds.maxStressDistance == 1
-    assert preset.thresholds.maxVowelDistance == 0.45
-    assert preset.thresholds.minTailSimilarity == 0.55
-
-def test_komposita_mode_works(engine):
-    q = parse_german_word("bewusstsein")
-    r = engine.search(q, Mode.KOMPOSITA, include_debug=True)
-    assert r.mode == Mode.KOMPOSITA
-    assert r.target.value == "rhyme"
-    assert r.results is not None
-
-def test_komposita_returns_at_least_as_many_as_multisyllabic(engine):
-    q = parse_german_word("bewusstsein")
-    ms = engine.search(q, Mode.MULTISYLLABIC)
-    ko = engine.search(q, Mode.KOMPOSITA)
-    assert len(ko.results) >= len(ms.results)
-
-# ── Komposita-API ─────────────────────────────────────────────────────────────
-
-def test_modes_includes_komposita(client):
-    r = client.get("/api/rhymes/modes")
-    assert r.status_code == 200
-    data = r.json()
-    assert "komposita" in data["modes"]
-    assert data["modes"]["komposita"]["target"] == "rhyme"
-
-def test_search_komposita_shape(client):
-    r = client.post("/api/rhymes/search", json={
-        "query": "bewusstsein",
-        "mode": "komposita",
-        "limit": 10,
-        "debug": True,
-    })
-    assert r.status_code == 200
-    data = r.json()
-    assert data["mode"] == "komposita"
-    assert data["target"] == "rhyme"
-    assert "results" in data
-    assert "thresholds" in data
-    assert "weights" in data
