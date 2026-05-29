@@ -5,7 +5,9 @@ import type {
   SearchResponse,
 } from "../types";
 
-const BASE = "http://localhost:8003";
+// Same-origin: im Prod liefert FastAPI das Frontend selbst aus, API liegt unter
+// derselben Domain. Im Dev proxyt Vite /api → localhost:8003 (siehe vite.config.ts).
+const BASE = "";
 
 async function post<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {

@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from app.services.rhyme_engine import RhymeEngine
 from app.services.word_loader import WordLoader, WordCache
 from app.api.routes import rhymes as rhymes_router
@@ -105,6 +106,18 @@ app.add_middleware(
 app.include_router(rhymes_router.router)
 
 
-@app.get("/")
-async def root():
-    return {"message": "Deutsche Reim-Engine", "docs": "/docs"}
+# ── Frontend ausliefern ────────────────────────────────────────────────────
+# FastAPI serviert das gebaute Vite-Frontend (frontend/dist) als same-origin SPA.
+# Muss NACH include_router gemountet werden, damit /api/... und /docs Vorrang
+# behalten — der "/"-Mount ist ein Catch-all und greift erst zuletzt.
+_FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+
+if _FRONTEND_DIST.is_dir():
+    app.mount("/", StaticFiles(directory=str(_FRONTEND_DIST), html=True), name="frontend")
+    logger.info(f"Frontend wird ausgeliefert aus {_FRONTEND_DIST}")
+else:
+    logger.warning(f"Kein Frontend-Build unter {_FRONTEND_DIST} – nur API verfügbar")
+
+    @app.get("/")
+    async def root():
+        return {"message": "Deutsche Reim-Engine", "docs": "/docs"}
