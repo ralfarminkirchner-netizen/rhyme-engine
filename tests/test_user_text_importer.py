@@ -78,6 +78,40 @@ def test_search_user_rhymes_uses_imported_phrase_units(tmp_path: Path):
     assert "patientenkontakt" not in phrases
 
 
+def test_search_user_rhymes_does_not_saturate_hard_endings_over_phrase_fit(tmp_path: Path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    (inbox / "rap.txt").write_text(
+        "\n".join(
+            [
+                "zu zweit sind wir komplett",
+                "wackeliges brett",
+                "genau jetzt",
+                "patientenkontakt",
+            ]
+        )
+        + "\n",
+        "utf-8",
+    )
+    refresh_user_text_database(
+        inbox_dir=inbox,
+        data_root=tmp_path,
+        prefer_pages_export=False,
+    )
+
+    result = search_user_rhymes(
+        "schattenkabinett",
+        db_path=tmp_path / "rhyme_database.sqlite",
+        limit=5,
+        min_score=0.45,
+    )
+
+    phrases = [row["phrase"] for row in result["results"]]
+    assert phrases.index("wackeliges brett") < phrases.index("zu zweit sind wir komplett")
+    assert "patientenkontakt" not in phrases
+    assert len({row["score"] for row in result["results"]}) > 1
+
+
 def test_missing_summary_returns_empty_status(tmp_path: Path):
     summary = load_user_text_summary(tmp_path)
 

@@ -199,6 +199,9 @@ export interface UserTextSummary {
 export interface UserRhymeResult {
   phrase: string;
   score: number;
+  raw_score?: number;
+  llm_score?: number;
+  llm_reason?: string;
   anchor: number;
   tail: number;
   vowel: number;
@@ -210,9 +213,18 @@ export interface UserRhymeResult {
   reason: string;
 }
 
+export interface UserRhymeRerankInfo {
+  enabled: boolean;
+  provider: string;
+  warning?: string;
+  candidate_count?: number;
+}
+
 export interface UserRhymeSearchResponse {
   query: string;
   results: UserRhymeResult[];
   total_candidates: number;
+  retrieved_candidates?: number;
+  rerank?: UserRhymeRerankInfo;
   warning?: string;
 }

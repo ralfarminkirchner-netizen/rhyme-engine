@@ -98,6 +98,9 @@ class UserTextSearchRequest(BaseModel):
     query: str
     limit: int = Field(30, ge=1, le=100)
     min_score: float = Field(0.0, ge=0.0, le=1.0)
+    rerank: bool = False
+    rerank_candidate_count: int = Field(120, ge=1, le=250)
+    include_context_in_rerank: bool = False
 
 
 @router.post("/rank-phrases", response_model=PhraseRankResponse)
@@ -200,6 +203,9 @@ async def search_user_texts(request: UserTextSearchRequest):
             query=request.query,
             limit=request.limit,
             min_score=request.min_score,
+            rerank=request.rerank,
+            rerank_candidate_count=request.rerank_candidate_count,
+            include_context_in_rerank=request.include_context_in_rerank,
         )
     except Exception as e:
         raise HTTPException(400, str(e))

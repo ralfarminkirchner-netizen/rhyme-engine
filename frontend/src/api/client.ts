@@ -48,6 +48,13 @@ export const api = {
   userTextSummary: () => get<UserTextSummary>("/api/rhymes/user-texts/summary"),
   importUserTexts: (req: { prefer_pages_export?: boolean; context_radius?: number }) =>
     post<UserTextSummary>("/api/rhymes/user-texts/import", req),
-  searchUserRhymes: (req: { query: string; limit?: number; min_score?: number }) =>
+  searchUserRhymes: (req: {
+    query: string;
+    limit?: number;
+    min_score?: number;
+    rerank?: boolean;
+    rerank_candidate_count?: number;
+    include_context_in_rerank?: boolean;
+  }) =>
     post<UserRhymeSearchResponse>("/api/rhymes/user-texts/search", req),
 };

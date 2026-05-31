@@ -650,11 +650,79 @@ def load_user_text_summary(data_root: Path = DATA_ROOT) -> Dict[str, Any]:
     return json.loads(summary_path.read_text("utf-8"))
 
 
+def _syllable_fit(query_syllables: int, candidate_syllables: int) -> float:
+    diff = abs(query_syllables - candidate_syllables)
+    if diff == 0:
+        return 1.0
+    if diff == 1:
+        return 0.88
+    if diff == 2:
+        return 0.70
+    if diff == 3:
+        return 0.52
+    return 0.40
+
+
+def _phrase_window_fit(candidate_syllables: int) -> float:
+    if 4 <= candidate_syllables <= 6:
+        return 1.0
+    if 3 <= candidate_syllables <= 8:
+        return 0.86
+    return 0.55
+
+
+def _terminal_fit(score: Any) -> float:
+    if score.anchor >= 0.90 and score.tail >= 0.90:
+        return 1.0
+    if score.anchor >= 0.78 and score.tail >= 0.70:
+        return 0.90
+    if score.anchor >= 0.70 and score.tail >= 0.50:
+        return 0.78
+    if score.anchor >= 0.62 and score.vowel >= 0.85:
+        return 0.66
+    if score.anchor >= 0.55:
+        return 0.48
+    return 0.0
+
+
+def _personal_phrase_score(
+    score: Any,
+    query_syllables: int,
+    candidate_syllables: int,
+    candidate_word_count: int,
+) -> float:
+    """Personal ranking profile for 3-8-syllable phrase-level rap rhymes."""
+    phrase_grip = (score.cadence * 0.65) + (score.global_v * 0.35)
+    multi_word_fit = 1.0 if candidate_word_count > 1 else 0.78
+    profile = (
+        _terminal_fit(score) * 0.40
+        + _syllable_fit(query_syllables, candidate_syllables) * 0.25
+        + _phrase_window_fit(candidate_syllables) * 0.15
+        + multi_word_fit * 0.10
+        + phrase_grip * 0.10
+    )
+
+    final_score = score.total * (0.45 + 0.55 * profile)
+
+    # Keep weak/non-anchors from climbing through cadence or vowel-spine fit.
+    if score.anchor < 0.55:
+        final_score = min(final_score, 0.35)
+    elif score.anchor < 0.62:
+        final_score = min(final_score, 0.44)
+    elif score.anchor < 0.70 and score.tail < 0.45:
+        final_score = min(final_score, 0.58)
+
+    return round(min(final_score, 0.9999), 4)
+
+
 def search_user_rhymes(
     query: str,
     db_path: Path = DB_PATH,
     limit: int = 30,
     min_score: float = 0.0,
+    rerank: bool = False,
+    rerank_candidate_count: int = 120,
+    include_context_in_rerank: bool = False,
 ) -> Dict[str, Any]:
     if not db_path.exists():
         return {"query": query, "results": [], "warning": "Reimdatenbank fehlt. Erst importieren."}
@@ -671,18 +739,30 @@ def search_user_rhymes(
     finally:
         conn.close()
 
+    try:
+        q_syllables = PhraseFeatures.from_phrase(query).syllable_count
+    except Exception:
+        q_syllables = max(1, len(WORD_RE.findall(query)) * 2)
+
     results: List[Dict[str, Any]] = []
     for row in rows:
         try:
             score = score_rhyme(query, row["phrase"])
         except Exception:
             continue
-        if score.total < min_score:
+
+        cand_syllables = row["syllable_count"]
+        cand_words = len(WORD_RE.findall(row["phrase"]))
+        final_score = _personal_phrase_score(score, q_syllables, cand_syllables, cand_words)
+
+        if final_score < min_score:
             continue
+
         results.append(
             {
                 "phrase": row["phrase"],
-                "score": score.total,
+                "score": round(final_score, 4),
+                "raw_score": score.total,
                 "anchor": score.anchor,
                 "tail": score.tail,
                 "vowel": score.vowel,
@@ -695,5 +775,29 @@ def search_user_rhymes(
             }
         )
 
-    results.sort(key=lambda item: item["score"], reverse=True)
-    return {"query": query, "results": results[:limit], "total_candidates": len(rows)}
+    results.sort(
+        key=lambda item: (item["score"], item["raw_score"], item["anchor"], item["tail"]),
+        reverse=True,
+    )
+
+    rerank_info: Dict[str, Any] = {"enabled": False, "provider": "none"}
+    if rerank:
+        from app.services.ai_reranker import rerank_rhymes
+
+        pool_size = max(limit, min(max(1, rerank_candidate_count), 250))
+        pool = results[:pool_size]
+        reranked = rerank_rhymes(query, pool)
+        results = reranked["results"]
+        rerank_info = {
+            key: value
+            for key, value in reranked.items()
+            if key not in {"results"}
+        }
+
+    return {
+        "query": query,
+        "results": results[:limit],
+        "total_candidates": len(rows),
+        "retrieved_candidates": len(results),
+        "rerank": rerank_info,
+    }
