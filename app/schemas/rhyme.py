@@ -128,6 +128,8 @@ class RankedCandidate(PhoneticFeatures):
     validation: ValidationResult
     activeVowels: List[str]
     activeTail: List[str]
+    rescue: Optional[str] = None
+    phrase_end_score: Optional[float] = None
 
 
 class RejectedCandidate(PhoneticFeatures):

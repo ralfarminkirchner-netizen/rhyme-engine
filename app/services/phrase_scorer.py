@@ -30,7 +30,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Optional
 from app.services.parser import parse_german_word
-from app.services.phonological_distance import tail_similarity, phoneme_similarity
+from app.services.phonological_distance import FEATURES, tail_similarity, phoneme_similarity
 from app.schemas.rhyme import ParsedWord
 
 # ── Schwellenwerte ────────────────────────────────────────────────────────────
@@ -38,6 +38,8 @@ from app.schemas.rhyme import ParsedWord
 ANCHOR_MIN           = 0.55   # Unter diesem Wert → harte Deckelung
 MAX_WITHOUT_ANCHOR   = 0.35   # Max-Score wenn Anker schwach
 SUFFIX_TRAP_PENALTY  = 0.35   # Abzug für Suffix-Traps (-schaft, -heit, etc.)
+RAP_SLANT_ANCHOR_MIN = 0.62   # gleicher Endvokal + harte Slant-Coda
+VOWEL_GATE_MAX       = 0.45   # anderer Endvokal darf keinen Anker simulieren
 
 SUFFIX_TRAPS = {
     "schaft", "heit", "keit", "ung", "isch", "lich",
@@ -54,6 +56,45 @@ WEIGHTS = {
 
 
 # ── Datenstrukturen ───────────────────────────────────────────────────────────
+
+_WORD_EDGE_CHARS = ".,!?;:()[]{}\"'„“”‚‘`"
+MAX_PHRASE_WINDOW_SYLLABLES = 8
+
+
+def _phrase_words(phrase: str) -> List[str]:
+    return [w.strip(_WORD_EDGE_CHARS) for w in phrase.strip().split() if w.strip(_WORD_EDGE_CHARS)]
+
+
+def _parse_context_words(words: List[str]) -> List[tuple[str, ParsedWord]]:
+    parsed: List[tuple[str, ParsedWord]] = []
+    for word in words:
+        try:
+            parsed.append((word, parse_german_word(word)))
+        except Exception:
+            continue
+    return parsed
+
+
+def _tail_phrase_window(parsed_words: List[tuple[str, ParsedWord]]) -> List[tuple[str, ParsedWord]]:
+    """Trailing phrase window for 3-8-syllable rap chains across word boundaries."""
+    if not parsed_words:
+        return []
+    total_syllables = sum(parsed.syllable_count for _, parsed in parsed_words)
+    if total_syllables <= MAX_PHRASE_WINDOW_SYLLABLES:
+        return parsed_words
+
+    window: List[tuple[str, ParsedWord]] = []
+    running = 0
+    for word, parsed in reversed(parsed_words):
+        next_count = running + parsed.syllable_count
+        if window and next_count > MAX_PHRASE_WINDOW_SYLLABLES:
+            break
+        window.append((word, parsed))
+        running = next_count
+        if running >= MAX_PHRASE_WINDOW_SYLLABLES:
+            break
+    return list(reversed(window))
+
 
 @dataclass
 class PhraseFeatures:
@@ -78,7 +119,7 @@ class PhraseFeatures:
 
     @classmethod
     def from_phrase(cls, phrase: str) -> "PhraseFeatures":
-        words = phrase.strip().split()
+        words = _phrase_words(phrase)
         last_word = words[-1] if words else phrase
         parsed = parse_german_word(last_word)
 
@@ -90,23 +131,16 @@ class PhraseFeatures:
         VOWELS = {k for k, v in PH_FEAT.items() if v.typ in {"vowel","diphthong"}}
         anchor_vowels = [p for p in anchor if p in VOWELS]
 
-        # Phrase-Vokalfolge (letzte 2-3 Wörter parsen)
+        # Phrase-Vokalfolge: trailing 3-8-syllable rap window, not just last word.
         phrase_vowels = []
-        context_words = words[-3:] if len(words) >= 3 else words
-        for w in context_words:
-            try:
-                p = parse_german_word(w)
-                phrase_vowels.extend(p.vowel_spine)
-            except Exception:
-                pass
+        parsed_context = _tail_phrase_window(_parse_context_words(words))
+        for _word, p in parsed_context:
+            phrase_vowels.extend(p.vowel_spine)
 
-        # Silbenzahl: Summe der letzten 3 Wörter
+        # Silbenzahl: Summe des trailing phrase windows.
         syllable_count = 0
-        for w in context_words:
-            try:
-                syllable_count += parse_german_word(w).syllable_count
-            except Exception:
-                pass
+        for _word, p in parsed_context:
+            syllable_count += p.syllable_count
 
         return cls(
             raw=phrase,
@@ -134,11 +168,62 @@ def _is_suffix_trap(word: str, query_word: str) -> bool:
     return False
 
 
+def _is_vowel(phoneme: str) -> bool:
+    feature = FEATURES.get(phoneme)
+    return bool(feature and feature.typ in {"vowel", "diphthong"})
+
+
+def _last_anchor_vowel(features: PhraseFeatures) -> str | None:
+    for phoneme in reversed(features.anchor):
+        if _is_vowel(phoneme):
+            return phoneme
+    return None
+
+
+def _anchor_coda(features: PhraseFeatures) -> List[str]:
+    for idx in range(len(features.anchor) - 1, -1, -1):
+        if _is_vowel(features.anchor[idx]):
+            return features.anchor[idx + 1:]
+    return features.anchor
+
+
+def _is_voiceless_obstruent(phoneme: str) -> bool:
+    feature = FEATURES.get(phoneme)
+    return bool(feature and feature.typ in {"plosive", "fricative", "affricate"} and not feature.voiced)
+
+
+def _rap_slant_coda_match(left: List[str], right: List[str]) -> bool:
+    """Deutschrap-Slant-Familie nach gleichem Endvokal: -tt/-ss/-ck/-tz/-chs."""
+    if not left or not right:
+        return False
+    if not all(_is_voiceless_obstruent(p) for p in left + right):
+        return False
+    return True
+
+
 def _anchor_score(q: PhraseFeatures, c: PhraseFeatures) -> float:
     """Ähnlichkeit des End-Ankers (terminal_span beider Phrasen)."""
     if not q.anchor or not c.anchor:
         return 0.0
-    return tail_similarity(q.anchor, c.anchor)
+    base = tail_similarity(q.anchor, c.anchor)
+    q_vowel = _last_anchor_vowel(q)
+    c_vowel = _last_anchor_vowel(c)
+
+    # Im Rap darf Konsonantenhärte keinen anderen Endvokal verdecken:
+    # "patientenkontakt" endet hart, aber nicht auf den -ett-Vokal.
+    if q_vowel and c_vowel and phoneme_similarity(q_vowel, c_vowel) < 0.82:
+        return min(base, VOWEL_GATE_MAX)
+
+    q_coda = _anchor_coda(q)
+    c_coda = _anchor_coda(c)
+    if q_vowel and c_vowel and _rap_slant_coda_match(q_coda, c_coda):
+        return max(base, RAP_SLANT_ANCHOR_MIN)
+
+    return base
+
+
+def _anchor_gated(anchor: float) -> bool:
+    return anchor < ANCHOR_MIN
 
 
 def _tail_score(q: PhraseFeatures, c: PhraseFeatures) -> float:
@@ -240,7 +325,7 @@ def score_rhyme(query: str, candidate: str) -> RhymeScore:
     suffix_penalized = False
 
     # Gate 1: Schwacher Anker → Score gedeckelt
-    if anchor < ANCHOR_MIN:
+    if _anchor_gated(anchor):
         raw_score = min(raw_score, MAX_WITHOUT_ANCHOR)
         anchor_gated = True
 

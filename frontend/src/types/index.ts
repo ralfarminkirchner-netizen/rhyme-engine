@@ -5,7 +5,6 @@ export type Mode =
   | "balanced"
   | "dirty"
   | "multisyllabic"
-  | "komposita"
   | "hardcore"
   | "endRhyme";
 
@@ -102,4 +101,118 @@ export interface SearchRequest {
   weights?: Partial<RawWeights>;
   limit?: number;
   debug?: boolean;
+}
+
+export interface PhraseRankRequest {
+  query: string;
+  candidates: string[];
+}
+
+export interface PhraseRankResult {
+  phrase: string;
+  score: number;
+  anchor: number;
+  tail: number;
+  vowel: number;
+  cadence: number;
+  anchor_gated: boolean;
+  suffix_penalized: boolean;
+  reason: string;
+}
+
+export interface PhraseRankResponse {
+  query: string;
+  ranked: PhraseRankResult[];
+}
+
+export interface HighlightSegment {
+  text: string;
+  kind: "text" | "space" | "punct" | "syllable";
+  word?: string | null;
+  syllable_index?: number | null;
+  accented: boolean;
+  terminal: boolean;
+  rhyme_group?: string | null;
+  color?: string | null;
+  phonetic: string[];
+}
+
+export interface HighlightLine {
+  raw_index: number;
+  lyric_index?: number | null;
+  raw: string;
+  is_lyric: boolean;
+  segments: HighlightSegment[];
+}
+
+export interface RhymeGroup {
+  key: string;
+  color: string;
+  count: number;
+  line_indices: number[];
+  examples: string[];
+}
+
+export interface RhymeHighlightResponse {
+  lines: HighlightLine[];
+  rhyme_groups: RhymeGroup[];
+  colored_syllable_count: number;
+  accented_syllable_count: number;
+}
+
+export interface UserTextDocument {
+  source_id: string;
+  title: string;
+  path: string;
+  kind: string;
+  extraction_method: string;
+  status: string;
+  line_count: number;
+  rhyme_unit_count: number;
+  warning: string;
+}
+
+export interface UserTextPairSample {
+  left_phrase: string;
+  right_phrase: string;
+  score: number;
+  source_title: string;
+  left_line_no: number;
+  right_line_no: number;
+}
+
+export interface UserTextSummary {
+  inbox_dir: string;
+  extracted_dir: string;
+  database_path: string;
+  source_count: number;
+  imported_count: number;
+  skipped_count: number;
+  line_count: number;
+  rhyme_unit_count: number;
+  rhyme_pair_count: number;
+  documents: UserTextDocument[];
+  sample_pairs: UserTextPairSample[];
+  warnings: string[];
+}
+
+export interface UserRhymeResult {
+  phrase: string;
+  score: number;
+  anchor: number;
+  tail: number;
+  vowel: number;
+  cadence: number;
+  source_title: string;
+  line_no: number;
+  line_text: string;
+  syllable_count: number;
+  reason: string;
+}
+
+export interface UserRhymeSearchResponse {
+  query: string;
+  results: UserRhymeResult[];
+  total_candidates: number;
+  warning?: string;
 }

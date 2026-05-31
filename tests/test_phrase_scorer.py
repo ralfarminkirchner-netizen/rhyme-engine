@@ -2,13 +2,34 @@ import pytest, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.services.phrase_scorer import rank_rhymes, score_rhyme
+from app.services.phrase_scorer import PhraseFeatures, rank_rhymes, score_rhyme
 
 
 # ── Testfall 1: schattenkabinett ──────────────────────────────────────────────
 
-FALSE_POSITIVES = ["aktienkapitals", "attentäterin", "attenborough"]
+FALSE_POSITIVES = ["aktienkapitals", "attentäterin", "attenborough", "patientenkontakt"]
 TRUE_RHYMES_1   = ["auf dem parkett", "mit dem tablett"]
+FOUR_SYLLABLE_QUERY = "wach lieg im Bett"
+FOUR_SYLLABLE_RHYMES = [
+    "Wackelndes Brett",
+    "Wachstum verlässt",
+    "Aktienregress",
+    "Plastikbesteck",
+    "Schattengewächs",
+    "straff wie ein Netz",
+    "schattungsgesetz",
+]
+FIVE_SYLLABLE_RHYMES = [
+    "absichtlich erschreckt",
+    "lass die finger weg",
+    "abwasch lass ich jetzt",
+    "machen wir es jetzt",
+    "mathe aber schlecht",
+    "wackeliges brett",
+    "plastik im besteck",
+    "Nachtschattengewächs",
+    "passt einfach perfekt",
+]
 
 def test_false_positives_capped():
     """aktienkapitals & Co. dürfen nie Top-Tier sein → Score ≤ 0.40"""
@@ -30,6 +51,42 @@ def test_true_rhymes_beat_false_positives():
     top2 = [r.phrase for r in ranked[:2]]
     for tr in TRUE_RHYMES_1:
         assert tr in top2, f"{tr!r} not in top 2 – got {top2}"
+
+def test_phrase_window_counts_four_syllable_query_across_word_boundaries():
+    """wach lieg im Bett ist ein 4-silbiges Phrase-Window, nicht nur 'lieg im Bett'."""
+    assert PhraseFeatures.from_phrase(FOUR_SYLLABLE_QUERY).syllable_count == 4
+    assert PhraseFeatures.from_phrase("abwasch lass ich jetzt").syllable_count == 5
+
+
+def test_four_syllable_slant_endings_are_not_anchor_gated():
+    """4-silbig: wach lieg im Bett → Brett/verlässt/regress/besteck/gewächs/Netz/Gesetz."""
+    scores = {cand: score_rhyme(FOUR_SYLLABLE_QUERY, cand) for cand in FOUR_SYLLABLE_RHYMES}
+
+    for cand, score in scores.items():
+        assert not score.anchor_gated, f"{cand!r} was gated: {score.explain()}"
+        assert score.total > 0.50, f"{cand!r} scored too low: {score.explain()}"
+
+    assert scores["Wackelndes Brett"].total >= 0.90
+
+def test_five_syllable_phrase_rhymes_are_not_anchor_gated():
+    """5-silbig: schattenkabinett → mehrwortige Endreimketten aus der Gold-Liste."""
+    scores = {cand: score_rhyme("schattenkabinett", cand) for cand in FIVE_SYLLABLE_RHYMES}
+
+    for cand, score in scores.items():
+        assert not score.anchor_gated, f"{cand!r} was gated: {score.explain()}"
+        assert score.total > 0.50, f"{cand!r} scored too low: {score.explain()}"
+
+    assert scores["wackeliges brett"].total >= 0.90
+
+
+def test_slant_endings_beat_global_false_positives():
+    """Gleicher Endvokal + harte Slant-Coda schlägt global ähnliche Fehlgriffe."""
+    ranked = rank_rhymes("schattenkabinett", FIVE_SYLLABLE_RHYMES + FALSE_POSITIVES)
+    ranked_phrases = [r.phrase for r in ranked]
+
+    for phrase in FIVE_SYLLABLE_RHYMES:
+        assert ranked_phrases.index(phrase) < ranked_phrases.index("aktienkapitals")
+        assert ranked_phrases.index(phrase) < ranked_phrases.index("patientenkontakt")
 
 def test_kein_respekt_middle_tier():
     """kein respekt ist ein guter aber nicht perfekter Reim (~0.7-0.85)"""

@@ -111,6 +111,24 @@ class RhymeEngine:
             score = min(score, ANCHOR_GATE_CAP)
         return score, bd
 
+    def _calculate_phrase_end_score(self, query: ParsedWord, candidate: ParsedWord) -> float:
+        from app.services.phonological_distance import tail_similarity
+        
+        tail_sim = tail_similarity(query.terminal_tail, candidate.terminal_tail)
+        delta = abs(query.syllable_count - candidate.syllable_count)
+        
+        if tail_sim > 0.88:
+            base = 0.95 - (delta * 0.04)
+        elif tail_sim > 0.75:
+            base = 0.82 - (delta * 0.06)
+        else:
+            base = 0.0
+            
+        if " " in candidate.text and len(candidate.text.split()) >= 2:
+            base += 0.08
+            
+        return max(0.0, min(1.0, round(base, 4)))
+
     def search(
         self,
         query: ParsedWord,
@@ -136,9 +154,40 @@ class RhymeEngine:
             av, at = _select_features(candidate, target)
             payload = dto.model_dump()
 
-            if val.valid:
-                score, bd = self._score(val, weights, thresholds)
-                results.append(RankedCandidate(**payload, activeVowels=av, activeTail=at, score=score, breakdown=bd, validation=val))
+            is_valid = val.valid
+            is_rescued = False
+            phrase_end_score = 0.0
+
+            if mode == Mode.BALANCED:
+                phrase_end_score = self._calculate_phrase_end_score(query, candidate)
+                if phrase_end_score >= 0.82:
+                    is_rescued = True
+                    is_valid = True
+
+            if is_valid:
+                if is_rescued:
+                    score = phrase_end_score
+                    bd = ScoreBreakdown(stress=0.0, vowelCore=0.0, tail=phrase_end_score, syllableFlex=0.0)
+                    if val.valid:
+                        orig_score, orig_bd = self._score(val, weights, thresholds)
+                        if orig_score > score:
+                            score = orig_score
+                            bd = orig_bd
+                            is_rescued = False
+                            phrase_end_score = 0.0
+                else:
+                    score, bd = self._score(val, weights, thresholds)
+                    
+                results.append(RankedCandidate(
+                    **payload, 
+                    activeVowels=av, 
+                    activeTail=at, 
+                    score=score, 
+                    breakdown=bd, 
+                    validation=val,
+                    rescue="terminal_phrase" if is_rescued else None,
+                    phrase_end_score=phrase_end_score if is_rescued else None
+                ))
             elif include_debug:
                 rejected.append(RejectedCandidate(**payload, activeVowels=av, activeTail=at, validation=val))
 

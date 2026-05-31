@@ -1,8 +1,13 @@
 import type {
   ModesResponse,
   PhoneticFeatures,
+  PhraseRankRequest,
+  PhraseRankResponse,
+  RhymeHighlightResponse,
   SearchRequest,
   SearchResponse,
+  UserRhymeSearchResponse,
+  UserTextSummary,
 } from "../types";
 
 // Same-origin: im Prod liefert FastAPI das Frontend selbst aus, API liegt unter
@@ -35,4 +40,14 @@ export const api = {
     post<PhoneticFeatures>("/api/rhymes/analyze", { word }),
   search: (req: SearchRequest) =>
     post<SearchResponse>("/api/rhymes/search", req),
+  rankPhrases: (req: PhraseRankRequest) =>
+    post<PhraseRankResponse>("/api/rhymes/rank-phrases", req),
+  highlightRhymes: (req: { text: string; context_radius?: number }) =>
+    post<RhymeHighlightResponse>("/api/rhymes/highlight-rhymes", req),
+  rakiText: () => get<{ text: string }>("/api/rhymes/training/raki-dich"),
+  userTextSummary: () => get<UserTextSummary>("/api/rhymes/user-texts/summary"),
+  importUserTexts: (req: { prefer_pages_export?: boolean; context_radius?: number }) =>
+    post<UserTextSummary>("/api/rhymes/user-texts/import", req),
+  searchUserRhymes: (req: { query: string; limit?: number; min_score?: number }) =>
+    post<UserRhymeSearchResponse>("/api/rhymes/user-texts/search", req),
 };
