@@ -427,6 +427,10 @@ export default function RhymeSearch() {
     }
   }, []);
 
+  useEffect(() => {
+    loadFullLibrary();
+  }, [loadFullLibrary]);
+
   const searchUserRhymes = useCallback(async () => {
     if (!userRhymeQuery.trim()) return;
     setUserRhymeLoading(true);
