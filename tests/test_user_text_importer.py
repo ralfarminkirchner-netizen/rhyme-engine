@@ -5,6 +5,7 @@ from app.services.user_text_importer import (
     load_full_user_library,
     load_user_text_summary,
     refresh_user_text_database,
+    save_rhyme_feedback,
     search_quote_library,
     search_text_library,
     search_user_rhymes,
@@ -285,3 +286,114 @@ def test_load_full_user_library_reports_missing_database(tmp_path: Path):
     assert library["status"] == "missing_database"
     assert library["counts"]["text_lines"] == 0
     assert library["text_lines"] == []
+
+
+def test_rhyme_feedback_is_saved_and_returned_in_search(tmp_path: Path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    (inbox / "rap.txt").write_text(
+        "\n".join(
+            [
+                "nachts wach lieg im Bett",
+                "absichtlich erschreckt",
+                "lass die finger weg",
+                "machen wir es jetzt",
+                "wackeliges brett",
+                "plastik im besteck",
+            ]
+        )
+        + "\n",
+        "utf-8",
+    )
+    refresh_user_text_database(
+        inbox_dir=inbox,
+        data_root=tmp_path,
+        prefer_pages_export=False,
+    )
+    db_path = tmp_path / "rhyme_database.sqlite"
+    first_search = search_user_rhymes(
+        "wach lieg im Bett",
+        db_path=db_path,
+        limit=5,
+        min_score=0.0,
+    )
+    target = first_search["results"][0]
+
+    saved = save_rhyme_feedback(
+        query="wach lieg im Bett",
+        source_title=target["source_title"],
+        line_no=target["line_no"],
+        phrase=target["phrase"],
+        rating=10,
+        comment="starker endreim",
+        db_path=db_path,
+    )
+
+    assert saved["status"] == "ok"
+    second_search = search_user_rhymes(
+        "wach lieg im Bett",
+        db_path=db_path,
+        limit=5,
+        min_score=0.0,
+    )
+    rated = [
+        row for row in second_search["results"]
+        if row["source_title"] == target["source_title"]
+        and row["line_no"] == target["line_no"]
+        and row["phrase"] == target["phrase"]
+    ][0]
+    assert rated["feedback_rating"] == 10
+    assert rated["feedback_comment"] == "starker endreim"
+    assert rated["feedback_score"] >= rated["score"]
+
+
+def test_rhyme_feedback_survives_reimport(tmp_path: Path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    (inbox / "rap.txt").write_text(
+        "\n".join(
+            [
+                "nachts wach lieg im Bett",
+                "absichtlich erschreckt",
+                "lass die finger weg",
+                "machen wir es jetzt",
+            ]
+        )
+        + "\n",
+        "utf-8",
+    )
+    refresh_user_text_database(
+        inbox_dir=inbox,
+        data_root=tmp_path,
+        prefer_pages_export=False,
+    )
+    db_path = tmp_path / "rhyme_database.sqlite"
+    target = search_user_rhymes(
+        "wach lieg im Bett",
+        db_path=db_path,
+        limit=1,
+        min_score=0.0,
+    )["results"][0]
+    save_rhyme_feedback(
+        query="wach lieg im Bett",
+        source_title=target["source_title"],
+        line_no=target["line_no"],
+        phrase=target["phrase"],
+        rating=2,
+        comment="zu glatt",
+        db_path=db_path,
+    )
+
+    refresh_user_text_database(
+        inbox_dir=inbox,
+        data_root=tmp_path,
+        prefer_pages_export=False,
+    )
+
+    result = search_user_rhymes(
+        "wach lieg im Bett",
+        db_path=db_path,
+        limit=5,
+        min_score=0.0,
+    )
+    assert any(row.get("feedback_rating") == 2 for row in result["results"])

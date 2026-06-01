@@ -546,6 +546,32 @@ def _create_schema(conn: sqlite3.Connection) -> None:
         create index idx_quotes_score on quote_entries(quote_score desc);
         """
     )
+    _ensure_feedback_schema(conn)
+
+
+def _ensure_feedback_schema(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        create table if not exists rhyme_feedback (
+            id integer primary key autoincrement,
+            query_norm text not null,
+            query text not null,
+            source_title text not null,
+            line_no integer not null,
+            phrase text not null,
+            rating integer not null,
+            comment text not null default '',
+            created_at real not null,
+            updated_at real not null,
+            unique(query_norm, source_title, line_no, phrase)
+        );
+
+        create index if not exists idx_feedback_query
+            on rhyme_feedback(query_norm);
+        create index if not exists idx_feedback_candidate
+            on rhyme_feedback(source_title, line_no, phrase);
+        """
+    )
 
 
 def _write_database(
@@ -864,6 +890,187 @@ def _personal_phrase_score(
     return round(min(final_score, 0.9999), 4)
 
 
+def _feedback_query_norm(query: str) -> str:
+    normalized = unicodedata.normalize("NFKC", query or "").casefold()
+    return " ".join(WORD_RE.findall(normalized))
+
+
+def _feedback_candidate_key(source_title: str, line_no: int, phrase: str) -> str:
+    return f"{source_title}\0{line_no}\0{phrase}"
+
+
+def save_rhyme_feedback(
+    query: str,
+    source_title: str,
+    line_no: int,
+    phrase: str,
+    rating: int,
+    comment: str = "",
+    db_path: Path = DB_PATH,
+) -> Dict[str, Any]:
+    if not db_path.exists():
+        return {
+            "status": "missing_database",
+            "warning": "Reimdatenbank fehlt. Erst importieren.",
+        }
+
+    clean_rating = max(0, min(10, int(rating)))
+    clean_comment = (comment or "").strip()[:2000]
+    now = time.time()
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        _ensure_feedback_schema(conn)
+        conn.execute(
+            """
+            insert into rhyme_feedback (
+                query_norm, query, source_title, line_no, phrase,
+                rating, comment, created_at, updated_at
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(query_norm, source_title, line_no, phrase)
+            do update set
+                query = excluded.query,
+                rating = excluded.rating,
+                comment = excluded.comment,
+                updated_at = excluded.updated_at
+            """,
+            (
+                _feedback_query_norm(query),
+                query,
+                source_title,
+                line_no,
+                phrase,
+                clean_rating,
+                clean_comment,
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+        row = conn.execute(
+            """
+            select query, source_title, line_no, phrase, rating, comment, updated_at
+            from rhyme_feedback
+            where query_norm = ? and source_title = ? and line_no = ? and phrase = ?
+            """,
+            (_feedback_query_norm(query), source_title, line_no, phrase),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    return {
+        "status": "ok",
+        "warning": "",
+        "feedback": dict(row) if row else {},
+    }
+
+
+def _load_feedback_maps(
+    conn: sqlite3.Connection,
+    query: str,
+) -> tuple[Dict[str, sqlite3.Row], Dict[str, Dict[str, Any]]]:
+    _ensure_feedback_schema(conn)
+    exact_rows = conn.execute(
+        """
+        select source_title, line_no, phrase, rating, comment, updated_at
+        from rhyme_feedback
+        where query_norm = ?
+        """,
+        (_feedback_query_norm(query),),
+    ).fetchall()
+    exact = {
+        _feedback_candidate_key(row["source_title"], row["line_no"], row["phrase"]): row
+        for row in exact_rows
+    }
+
+    aggregate_rows = conn.execute(
+        """
+        select source_title, line_no, phrase,
+               count(*) as feedback_count,
+               avg(rating) as feedback_average
+        from rhyme_feedback
+        group by source_title, line_no, phrase
+        """
+    ).fetchall()
+    aggregate = {
+        _feedback_candidate_key(row["source_title"], row["line_no"], row["phrase"]): {
+            "feedback_count": int(row["feedback_count"]),
+            "feedback_average": float(row["feedback_average"]),
+        }
+        for row in aggregate_rows
+    }
+    return exact, aggregate
+
+
+def _apply_feedback_to_results(
+    query: str,
+    results: List[Dict[str, Any]],
+    db_path: Path,
+) -> List[Dict[str, Any]]:
+    if not db_path.exists() or not results:
+        return results
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        exact, aggregate = _load_feedback_maps(conn, query)
+    finally:
+        conn.close()
+
+    enriched: List[Dict[str, Any]] = []
+    has_feedback_for_results = False
+    for result in results:
+        key = _feedback_candidate_key(
+            str(result.get("source_title", "")),
+            int(result.get("line_no", 0) or 0),
+            str(result.get("phrase", "")),
+        )
+        base_score = float(
+            result.get("learned_score")
+            or result.get("llm_score")
+            or result.get("score")
+            or 0.0
+        )
+        feedback_row = exact.get(key)
+        feedback_aggregate = aggregate.get(key, {"feedback_count": 0, "feedback_average": None})
+        feedback_average = feedback_aggregate.get("feedback_average")
+        feedback_count = int(feedback_aggregate.get("feedback_count") or 0)
+
+        adjustment = 0.0
+        if feedback_row:
+            has_feedback_for_results = True
+            rating = int(feedback_row["rating"])
+            adjustment = ((rating - 5) / 5) * 0.22
+        elif feedback_average is not None:
+            has_feedback_for_results = True
+            adjustment = ((float(feedback_average) - 5) / 5) * 0.10
+
+        item = dict(result)
+        item["feedback_rating"] = int(feedback_row["rating"]) if feedback_row else None
+        item["feedback_comment"] = feedback_row["comment"] if feedback_row else ""
+        item["feedback_updated_at"] = feedback_row["updated_at"] if feedback_row else None
+        item["feedback_count"] = feedback_count
+        item["feedback_average"] = round(float(feedback_average), 3) if feedback_average is not None else None
+        item["feedback_score"] = round(max(0.0, min(0.9999, base_score + adjustment)), 4)
+        enriched.append(item)
+
+    if not has_feedback_for_results:
+        return enriched
+
+    enriched.sort(
+        key=lambda item: (
+            item.get("feedback_score", 0.0),
+            item.get("learned_score", item.get("score", 0.0)),
+            item.get("score", 0.0),
+            item.get("anchor", 0.0),
+            item.get("tail", 0.0),
+        ),
+        reverse=True,
+    )
+    return enriched
+
+
 def search_user_rhymes(
     query: str,
     db_path: Path = DB_PATH,
@@ -942,6 +1149,8 @@ def search_user_rhymes(
             for key, value in reranked.items()
             if key not in {"results"}
         }
+
+    results = _apply_feedback_to_results(query, results, db_path)
 
     return {
         "query": query,

@@ -219,6 +219,11 @@ export interface UserRhymeResult {
   llm_reason?: string;
   learned_score?: number;
   learned_reason?: string;
+  feedback_score?: number;
+  feedback_rating?: number | null;
+  feedback_comment?: string;
+  feedback_average?: number | null;
+  feedback_count?: number;
   anchor: number;
   tail: number;
   vowel: number;
@@ -246,6 +251,20 @@ export interface UserRhymeSearchResponse {
   retrieved_candidates?: number;
   rerank?: UserRhymeRerankInfo;
   warning?: string;
+}
+
+export interface UserRhymeFeedbackResponse {
+  status: string;
+  warning?: string;
+  feedback: {
+    query: string;
+    source_title: string;
+    line_no: number;
+    phrase: string;
+    rating: number;
+    comment: string;
+    updated_at: number;
+  };
 }
 
 export interface UserTextLineResult {

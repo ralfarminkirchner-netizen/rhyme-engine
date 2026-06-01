@@ -113,6 +113,15 @@ class UserLibraryListRequest(BaseModel):
     limit: int = Field(500, ge=1, le=5000)
 
 
+class UserRhymeFeedbackRequest(BaseModel):
+    query: str
+    source_title: str
+    line_no: int = Field(..., ge=1)
+    phrase: str
+    rating: int = Field(..., ge=0, le=10)
+    comment: str = Field("", max_length=2000)
+
+
 class UserTrainingBuildRequest(BaseModel):
     max_examples: int = Field(2000, ge=1, le=50000)
     include_text_lines: bool = True
@@ -249,6 +258,24 @@ async def search_user_text_lines(request: UserLibrarySearchRequest):
         return search_text_library(
             query=request.query,
             limit=request.limit,
+        )
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/user-texts/feedback")
+async def save_user_rhyme_feedback(request: UserRhymeFeedbackRequest):
+    """Speichert lokale 0-10-Bewertungen fuer Reimtreffer."""
+    try:
+        from app.services.user_text_importer import save_rhyme_feedback
+
+        return save_rhyme_feedback(
+            query=request.query,
+            source_title=request.source_title,
+            line_no=request.line_no,
+            phrase=request.phrase,
+            rating=request.rating,
+            comment=request.comment,
         )
     except Exception as e:
         raise HTTPException(400, str(e))

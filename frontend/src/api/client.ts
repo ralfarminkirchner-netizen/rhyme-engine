@@ -10,6 +10,7 @@ import type {
   UserLocalModelTrainResponse,
   UserPipelineResponse,
   UserQuoteSearchResponse,
+  UserRhymeFeedbackResponse,
   UserTrainingBuildResponse,
   UserTextLineSearchResponse,
   UserRhymeSearchResponse,
@@ -63,6 +64,15 @@ export const api = {
     include_context_in_rerank?: boolean;
   }) =>
     post<UserRhymeSearchResponse>("/api/rhymes/user-texts/search", req),
+  saveRhymeFeedback: (req: {
+    query: string;
+    source_title: string;
+    line_no: number;
+    phrase: string;
+    rating: number;
+    comment?: string;
+  }) =>
+    post<UserRhymeFeedbackResponse>("/api/rhymes/user-texts/feedback", req),
   searchUserTextLines: (req: { query: string; limit?: number }) =>
     post<UserTextLineSearchResponse>("/api/rhymes/user-texts/search-lines", req),
   searchUserQuotes: (req: { query: string; limit?: number; min_score?: number }) =>

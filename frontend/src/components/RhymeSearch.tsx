@@ -156,22 +156,93 @@ function PhraseRow({ r, i }: { r: PhraseRankResult; i: number }) {
   );
 }
 
-function UserRhymeRow({ r, i }: { r: UserRhymeResult; i: number }) {
-  const displayScore = r.learned_score ?? r.llm_score ?? r.score;
+const RATING_VALUES = [0,1,2,3,4,5,6,7,8,9,10];
+
+function UserRhymeRow({
+  r,
+  i,
+  onFeedback,
+}: {
+  r: UserRhymeResult;
+  i: number;
+  onFeedback: (r: UserRhymeResult, rating: number, comment: string) => void;
+}) {
+  const [commentOpen, setCommentOpen] = useState(Boolean(r.feedback_comment));
+  const [draftComment, setDraftComment] = useState(r.feedback_comment ?? "");
+  const displayScore = r.feedback_score ?? r.learned_score ?? r.llm_score ?? r.score;
+  const currentRating = r.feedback_rating ?? null;
+
+  useEffect(() => {
+    setDraftComment(r.feedback_comment ?? "");
+    setCommentOpen(Boolean(r.feedback_comment));
+  }, [r.feedback_comment, r.line_no, r.phrase, r.source_title]);
+
   return (
-    <tr style={{ background: i % 2 === 0 ? "#0f0f0f" : "#121212" }}>
-      <td style={s.td}>{i + 1}</td>
-      <td style={{ ...s.td, fontWeight: 700, color: "#fff" }}>{r.phrase}</td>
-      <td style={s.td}>
-        <span style={{ color: scoreColor(displayScore), fontWeight: 700 }}>
-          {displayScore.toFixed(3)}
-        </span>
-      </td>
-      <td style={s.td}>{r.syllable_count}</td>
-      <td style={s.td}>{r.source_title}</td>
-      <td style={s.td}>{r.line_no}</td>
-      <td style={{ ...s.td, color: "#777", fontSize: "0.75rem" }}>{r.line_text}</td>
-    </tr>
+    <>
+      <tr style={{ background: i % 2 === 0 ? "#0f0f0f" : "#121212" }}>
+        <td style={s.td}>{i + 1}</td>
+        <td style={{ ...s.td, fontWeight: 700, color: "#fff" }}>{r.phrase}</td>
+        <td style={s.td}>
+          <span style={{ color: scoreColor(displayScore), fontWeight: 700 }}>
+            {displayScore.toFixed(3)}
+          </span>
+        </td>
+        <td style={s.td}>{r.syllable_count}</td>
+        <td style={s.td}>
+          <div style={s.ratingScale}>
+            {RATING_VALUES.map((rating) => (
+              <button
+                key={rating}
+                type="button"
+                title={`Bewertung ${rating}/10`}
+                style={{
+                  ...s.ratingBtn,
+                  ...(currentRating === rating ? s.ratingBtnActive : {}),
+                }}
+                onClick={() => onFeedback(r, rating, draftComment)}
+              >
+                {rating}
+              </button>
+            ))}
+          </div>
+          <div style={s.feedbackMeta}>
+            <button
+              type="button"
+              style={s.commentToggle}
+              onClick={() => setCommentOpen((open) => !open)}
+            >
+              {commentOpen ? "Kommentar zu" : "Kommentar"}
+            </button>
+            {r.feedback_average != null && (
+              <span>{r.feedback_average.toFixed(1)} aus {r.feedback_count}</span>
+            )}
+          </div>
+        </td>
+        <td style={s.td}>{r.source_title}</td>
+        <td style={s.td}>{r.line_no}</td>
+        <td style={{ ...s.td, color: "#777", fontSize: "0.75rem" }}>{r.line_text}</td>
+      </tr>
+      {commentOpen && (
+        <tr style={{ background: i % 2 === 0 ? "#0f0f0f" : "#121212" }}>
+          <td style={s.td} />
+          <td style={s.td} colSpan={7}>
+            <textarea
+              style={s.feedbackTextarea}
+              value={draftComment}
+              onChange={(e) => setDraftComment(e.target.value)}
+              placeholder="Kommentar zu diesem Reim"
+            />
+            <button
+              type="button"
+              style={s.searchBtn}
+              onClick={() => onFeedback(r, currentRating ?? 5, draftComment)}
+            >
+              Kommentar speichern
+            </button>
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 
@@ -451,6 +522,46 @@ export default function RhymeSearch() {
     }
   }, [userRhymeQuery, useTrainedRerank]);
 
+  const saveRhymeFeedback = useCallback(async (
+    row: UserRhymeResult,
+    rating: number,
+    comment: string,
+  ) => {
+    const queryForFeedback = userRhymeResponse?.query || userRhymeQuery;
+    try {
+      const res = await api.saveRhymeFeedback({
+        query: queryForFeedback,
+        source_title: row.source_title,
+        line_no: row.line_no,
+        phrase: row.phrase,
+        rating,
+        comment,
+      });
+      setUserRhymeResponse((current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          results: current.results.map((candidate) => {
+            const sameCandidate =
+              candidate.source_title === row.source_title &&
+              candidate.line_no === row.line_no &&
+              candidate.phrase === row.phrase;
+            if (!sameCandidate) return candidate;
+            return {
+              ...candidate,
+              feedback_rating: res.feedback.rating,
+              feedback_comment: res.feedback.comment,
+              feedback_count: Math.max(candidate.feedback_count ?? 0, 1),
+              feedback_average: res.feedback.rating,
+            };
+          }),
+        };
+      });
+    } catch (e) {
+      setUserTextError(String(e));
+    }
+  }, [userRhymeQuery, userRhymeResponse?.query]);
+
   const searchTextLibrary = useCallback(async () => {
     if (!textLibraryQuery.trim()) return;
     setTextLibraryLoading(true);
@@ -673,6 +784,36 @@ export default function RhymeSearch() {
             )}
           </>
         )}
+        {userRhymeResponse && (
+          <>
+            <div style={s.meta}>
+              {userRhymeResponse.results.length} Treffer aus {userRhymeResponse.total_candidates} Units · Query:{" "}
+              <b>{userRhymeResponse.query}</b>
+              {userRhymeResponse.rerank?.enabled && (
+                <> · Rerank: <b>{userRhymeResponse.rerank.provider}</b></>
+              )}
+            </div>
+            <table style={s.table}>
+              <thead>
+                <tr>
+                  {["#","Phrase","Score","Sil.","Bewertung","Quelle","Zeile","Kontext"].map((h) => (
+                    <th key={h} style={s.th}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {userRhymeResponse.results.map((r, i) => (
+                  <UserRhymeRow
+                    key={`${r.source_title}-${r.line_no}-${r.phrase}-${i}`}
+                    r={r}
+                    i={i}
+                    onFeedback={saveRhymeFeedback}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
         {fullLibrary && (
           <div style={s.fullLibrary}>
             {fullLibrary.warning && <div style={s.errorBox}>{fullLibrary.warning}</div>}
@@ -772,31 +913,6 @@ export default function RhymeSearch() {
               </table>
             ) : <div style={s.noResults}>Keine Quotes. Erst Texte importieren.</div>}
           </div>
-        )}
-        {userRhymeResponse && (
-          <>
-            <div style={s.meta}>
-              {userRhymeResponse.results.length} Treffer aus {userRhymeResponse.total_candidates} Units · Query:{" "}
-              <b>{userRhymeResponse.query}</b>
-              {userRhymeResponse.rerank?.enabled && (
-                <> · Rerank: <b>{userRhymeResponse.rerank.provider}</b></>
-              )}
-            </div>
-            <table style={s.table}>
-              <thead>
-                <tr>
-                  {["#","Phrase","Score","Sil.","Quelle","Zeile","Kontext"].map((h) => (
-                    <th key={h} style={s.th}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {userRhymeResponse.results.map((r, i) => (
-                  <UserRhymeRow key={`${r.source_title}-${r.line_no}-${r.phrase}-${i}`} r={r} i={i} />
-                ))}
-              </tbody>
-            </table>
-          </>
         )}
         <div style={s.libraryGrid}>
           <div>
@@ -1134,6 +1250,61 @@ const s = {
     borderBottom: "1px solid #2a2a2a", color: "#888", fontWeight: 500,
   },
   td: { padding: "0.35rem 0.6rem", borderBottom: "1px solid #1a1a1a", color: "#ccc" },
+  ratingScale: {
+    display: "grid",
+    gridTemplateColumns: "repeat(11, 1.65rem)",
+    gap: "0.18rem",
+    alignItems: "center",
+  } as React.CSSProperties,
+  ratingBtn: {
+    width: "1.65rem",
+    height: "1.65rem",
+    padding: 0,
+    background: "#181818",
+    color: "#888",
+    border: "1px solid #333",
+    borderRadius: 4,
+    cursor: "pointer",
+    fontSize: "0.72rem",
+    lineHeight: 1,
+  } as React.CSSProperties,
+  ratingBtnActive: {
+    background: "#f0c040",
+    color: "#0d0d0d",
+    borderColor: "#f0c040",
+    fontWeight: 800,
+  } as React.CSSProperties,
+  feedbackMeta: {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.5rem",
+    marginTop: "0.3rem",
+    color: "#666",
+    fontSize: "0.72rem",
+  } as React.CSSProperties,
+  commentToggle: {
+    padding: 0,
+    background: "transparent",
+    border: "none",
+    color: "#888",
+    cursor: "pointer",
+    fontSize: "0.72rem",
+    textDecoration: "underline",
+  } as React.CSSProperties,
+  feedbackTextarea: {
+    width: "100%",
+    minHeight: "4rem",
+    boxSizing: "border-box" as const,
+    marginBottom: "0.45rem",
+    padding: "0.6rem 0.7rem",
+    background: "#151515",
+    border: "1px solid #333",
+    borderRadius: 6,
+    color: "#ddd",
+    fontFamily: "inherit",
+    fontSize: "0.84rem",
+    resize: "vertical" as const,
+  } as React.CSSProperties,
   noResults: { color: "#555", padding: "1rem" } as React.CSSProperties,
   panelFirst: {
     marginBottom: "2rem", paddingBottom: "1rem",

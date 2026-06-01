@@ -154,6 +154,10 @@ def rerank_rhymes(query: str, candidates: List[Dict[str, Any]]) -> Dict[str, Any
     if os.getenv("GEMINI_API_KEY"):
         return rerank_with_gemini(query, candidates)
 
+    if os.getenv("RHYME_RERANKER_COMMAND"):
+        from app.services.rhyme_reranker import rerank_with_command
+        return rerank_with_command(query, candidates)
+
     from app.services.local_rhyme_model import load_local_rhyme_model, rerank_with_local_model
     if load_local_rhyme_model():
         return rerank_with_local_model(query, candidates)
