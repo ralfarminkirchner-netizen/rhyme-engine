@@ -10,8 +10,15 @@ import type {
   RhymeHighlightResponse,
   RawWeights,
   SearchResponse,
+  UserLocalModelTrainResponse,
+  UserPipelineResponse,
+  UserQuoteResult,
+  UserQuoteSearchResponse,
   UserRhymeResult,
   UserRhymeSearchResponse,
+  UserTrainingBuildResponse,
+  UserTextLineResult,
+  UserTextLineSearchResponse,
   UserTextSummary,
 } from "../types";
 
@@ -149,19 +156,56 @@ function PhraseRow({ r, i }: { r: PhraseRankResult; i: number }) {
 }
 
 function UserRhymeRow({ r, i }: { r: UserRhymeResult; i: number }) {
+  const displayScore = r.learned_score ?? r.llm_score ?? r.score;
   return (
     <tr style={{ background: i % 2 === 0 ? "#0f0f0f" : "#121212" }}>
       <td style={s.td}>{i + 1}</td>
       <td style={{ ...s.td, fontWeight: 700, color: "#fff" }}>{r.phrase}</td>
       <td style={s.td}>
-        <span style={{ color: scoreColor(r.score), fontWeight: 700 }}>
-          {r.score.toFixed(3)}
+        <span style={{ color: scoreColor(displayScore), fontWeight: 700 }}>
+          {displayScore.toFixed(3)}
         </span>
       </td>
       <td style={s.td}>{r.syllable_count}</td>
       <td style={s.td}>{r.source_title}</td>
       <td style={s.td}>{r.line_no}</td>
       <td style={{ ...s.td, color: "#777", fontSize: "0.75rem" }}>{r.line_text}</td>
+    </tr>
+  );
+}
+
+function UserTextLineRow({ r, i }: { r: UserTextLineResult; i: number }) {
+  return (
+    <tr style={{ background: i % 2 === 0 ? "#0f0f0f" : "#121212" }}>
+      <td style={s.td}>{i + 1}</td>
+      <td style={{ ...s.td, color: "#ddd" }}>{r.text}</td>
+      <td style={s.td}>
+        <span style={{ color: scoreColor(r.score), fontWeight: 700 }}>
+          {r.score.toFixed(3)}
+        </span>
+      </td>
+      <td style={s.td}>{r.matched_terms}</td>
+      <td style={s.td}>{r.source_title}</td>
+      <td style={s.td}>{r.line_no}</td>
+    </tr>
+  );
+}
+
+function UserQuoteRow({ r, i }: { r: UserQuoteResult; i: number }) {
+  return (
+    <tr style={{ background: i % 2 === 0 ? "#0f0f0f" : "#121212" }}>
+      <td style={s.td}>{i + 1}</td>
+      <td style={{ ...s.td, color: "#fff", fontWeight: 700 }}>{r.text}</td>
+      <td style={s.td}>
+        <span style={{ color: scoreColor(r.score), fontWeight: 700 }}>
+          {r.score.toFixed(3)}
+        </span>
+      </td>
+      <td style={s.td}>q{r.quote_score.toFixed(2)}</td>
+      <td style={s.td}>r{r.rhyme_score.toFixed(2)}</td>
+      <td style={s.td}>{r.phrase}</td>
+      <td style={s.td}>{r.source_title}:{r.line_no}</td>
+      <td style={{ ...s.td, color: "#777", fontSize: "0.75rem" }}>{r.reason}</td>
     </tr>
   );
 }
@@ -273,6 +317,19 @@ export default function RhymeSearch() {
   const [userRhymeQuery, setUserRhymeQuery] = useState("wach lieg im Bett");
   const [userRhymeResponse, setUserRhymeResponse] = useState<UserRhymeSearchResponse | null>(null);
   const [userRhymeLoading, setUserRhymeLoading] = useState(false);
+  const [textLibraryQuery, setTextLibraryQuery] = useState("Schatten");
+  const [textLibraryResponse, setTextLibraryResponse] = useState<UserTextLineSearchResponse | null>(null);
+  const [textLibraryLoading, setTextLibraryLoading] = useState(false);
+  const [quoteLibraryQuery, setQuoteLibraryQuery] = useState("schattenkabinett");
+  const [quoteLibraryResponse, setQuoteLibraryResponse] = useState<UserQuoteSearchResponse | null>(null);
+  const [quoteLibraryLoading, setQuoteLibraryLoading] = useState(false);
+  const [trainingBuild, setTrainingBuild] = useState<UserTrainingBuildResponse | null>(null);
+  const [trainingLoading, setTrainingLoading] = useState(false);
+  const [localModelTrain, setLocalModelTrain] = useState<UserLocalModelTrainResponse | null>(null);
+  const [localModelLoading, setLocalModelLoading] = useState(false);
+  const [useTrainedRerank, setUseTrainedRerank] = useState(false);
+  const [pipelineResponse, setPipelineResponse] = useState<UserPipelineResponse | null>(null);
+  const [pipelineLoading, setPipelineLoading] = useState(false);
 
   const isTerminal = response?.target === "terminal";
 
@@ -363,12 +420,112 @@ export default function RhymeSearch() {
         query: userRhymeQuery,
         limit: 25,
         min_score: 0.45,
+        rerank: useTrainedRerank,
+        rerank_candidate_count: 120,
       });
       setUserRhymeResponse(res);
     } catch (e) {
       setUserTextError(String(e));
     } finally {
       setUserRhymeLoading(false);
+    }
+  }, [userRhymeQuery, useTrainedRerank]);
+
+  const searchTextLibrary = useCallback(async () => {
+    if (!textLibraryQuery.trim()) return;
+    setTextLibraryLoading(true);
+    setUserTextError(null);
+    try {
+      const res = await api.searchUserTextLines({
+        query: textLibraryQuery,
+        limit: 25,
+      });
+      setTextLibraryResponse(res);
+    } catch (e) {
+      setUserTextError(String(e));
+    } finally {
+      setTextLibraryLoading(false);
+    }
+  }, [textLibraryQuery]);
+
+  const searchQuoteLibrary = useCallback(async () => {
+    if (!quoteLibraryQuery.trim()) return;
+    setQuoteLibraryLoading(true);
+    setUserTextError(null);
+    try {
+      const res = await api.searchUserQuotes({
+        query: quoteLibraryQuery,
+        limit: 25,
+        min_score: 0.25,
+      });
+      setQuoteLibraryResponse(res);
+    } catch (e) {
+      setUserTextError(String(e));
+    } finally {
+      setQuoteLibraryLoading(false);
+    }
+  }, [quoteLibraryQuery]);
+
+  const buildUserTraining = useCallback(async () => {
+    setTrainingLoading(true);
+    setUserTextError(null);
+    try {
+      const res = await api.buildUserTraining({
+        max_examples: 2000,
+        include_text_lines: true,
+      });
+      setTrainingBuild(res);
+    } catch (e) {
+      setUserTextError(String(e));
+    } finally {
+      setTrainingLoading(false);
+    }
+  }, []);
+
+  const trainLocalModel = useCallback(async () => {
+    setLocalModelLoading(true);
+    setUserTextError(null);
+    try {
+      const res = await api.trainLocalModel({
+        min_pair_score: 0.58,
+      });
+      setLocalModelTrain(res);
+    } catch (e) {
+      setUserTextError(String(e));
+    } finally {
+      setLocalModelLoading(false);
+    }
+  }, []);
+
+  const runUserPipeline = useCallback(async () => {
+    setPipelineLoading(true);
+    setUserTextError(null);
+    try {
+      const res = await api.runUserPipeline({
+        query: userRhymeQuery,
+        prefer_pages_export: true,
+        context_radius: 12,
+        max_examples: 2000,
+        min_pair_score: 0.58,
+        limit: 25,
+        min_score: 0.40,
+      });
+      setPipelineResponse(res);
+      setUserSummary(res.import);
+      setTrainingBuild(res.training);
+      setLocalModelTrain(res.model);
+      setUserRhymeResponse({
+        query: res.query,
+        results: res.search.results,
+        total_candidates: res.search.total_candidates,
+        retrieved_candidates: res.search.retrieved_candidates,
+        rerank: res.search.rerank,
+      });
+      setUseTrainedRerank(true);
+    } catch (e) {
+      setUserTextError(String(e));
+    } finally {
+      setPipelineLoading(false);
     }
   }, [userRhymeQuery]);
 
@@ -436,6 +593,14 @@ export default function RhymeSearch() {
             onChange={(e) => setUserRhymeQuery(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && searchUserRhymes()}
           />
+          <label style={s.compactLabel}>
+            <input
+              type="checkbox"
+              checked={useTrainedRerank}
+              onChange={(e) => setUseTrainedRerank(e.target.checked)}
+            />
+            trainiert
+          </label>
           <button style={s.searchBtn} onClick={searchUserRhymes}>
             {userRhymeLoading ? "Suche" : "DB suchen"}
           </button>
@@ -448,6 +613,7 @@ export default function RhymeSearch() {
               <div style={s.statBox}><b>{userSummary.line_count}</b><span>Zeilen</span></div>
               <div style={s.statBox}><b>{userSummary.rhyme_unit_count}</b><span>3-8-Silben-Units</span></div>
               <div style={s.statBox}><b>{userSummary.rhyme_pair_count}</b><span>lokale Reimpaare</span></div>
+              <div style={s.statBox}><b>{userSummary.quote_count}</b><span>Quotes</span></div>
             </div>
             {userSummary.documents.length > 0 && (
               <div style={s.docList}>
@@ -468,6 +634,16 @@ export default function RhymeSearch() {
                 ))}
               </div>
             )}
+            {userSummary.sample_quotes.length > 0 && (
+              <div style={s.samplePairs}>
+                {userSummary.sample_quotes.slice(0, 6).map((quote) => (
+                  <div key={`${quote.source_id}-${quote.line_no}`} style={s.samplePair}>
+                    <b>{quote.text}</b>
+                    <span>{quote.quote_score.toFixed(3)} · {quote.source_title}:{quote.line_no}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </>
         )}
         {userRhymeResponse && (
@@ -475,6 +651,9 @@ export default function RhymeSearch() {
             <div style={s.meta}>
               {userRhymeResponse.results.length} Treffer aus {userRhymeResponse.total_candidates} Units · Query:{" "}
               <b>{userRhymeResponse.query}</b>
+              {userRhymeResponse.rerank?.enabled && (
+                <> · Rerank: <b>{userRhymeResponse.rerank.provider}</b></>
+              )}
             </div>
             <table style={s.table}>
               <thead>
@@ -492,6 +671,119 @@ export default function RhymeSearch() {
             </table>
           </>
         )}
+        <div style={s.libraryGrid}>
+          <div>
+            <h3 style={s.subSectionTitle}>Textbibliothek</h3>
+            <div style={s.row}>
+              <input
+                style={s.input}
+                value={textLibraryQuery}
+                onChange={(e) => setTextLibraryQuery(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && searchTextLibrary()}
+              />
+              <button style={s.searchBtn} onClick={searchTextLibrary}>
+                {textLibraryLoading ? "Suche" : "Text suchen"}
+              </button>
+            </div>
+            {textLibraryResponse && (
+              <>
+                <div style={s.meta}>
+                  {textLibraryResponse.results.length} Treffer aus {textLibraryResponse.total_candidates} Zeilen
+                </div>
+                <table style={s.table}>
+                  <thead>
+                    <tr>
+                      {["#","Zeile","Score","Hits","Quelle","Nr."].map((h) => (
+                        <th key={h} style={s.th}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {textLibraryResponse.results.map((r, i) => (
+                      <UserTextLineRow key={`${r.source_title}-${r.line_no}-${i}`} r={r} i={i} />
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            )}
+          </div>
+          <div>
+            <h3 style={s.subSectionTitle}>Quote-Bibliothek</h3>
+            <div style={s.row}>
+              <input
+                style={s.input}
+                value={quoteLibraryQuery}
+                onChange={(e) => setQuoteLibraryQuery(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && searchQuoteLibrary()}
+              />
+              <button style={s.searchBtn} onClick={searchQuoteLibrary}>
+                {quoteLibraryLoading ? "Suche" : "Quotes suchen"}
+              </button>
+            </div>
+            {quoteLibraryResponse && (
+              <>
+                <div style={s.meta}>
+                  {quoteLibraryResponse.results.length} Treffer aus {quoteLibraryResponse.total_candidates} Quotes
+                </div>
+                <table style={s.table}>
+                  <thead>
+                    <tr>
+                      {["#","Quote","Score","Quote","Reim","Phrase","Quelle","Grund"].map((h) => (
+                        <th key={h} style={s.th}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {quoteLibraryResponse.results.map((r, i) => (
+                      <UserQuoteRow key={`${r.source_title}-${r.line_no}-${i}`} r={r} i={i} />
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            )}
+          </div>
+        </div>
+        <div style={s.trainingBox}>
+          <div>
+            <h3 style={s.subSectionTitle}>Trainingsdaten</h3>
+          </div>
+          <button style={s.searchBtn} onClick={buildUserTraining}>
+            {trainingLoading ? "Baue" : "Training bauen"}
+          </button>
+          <button style={s.resetBtn} onClick={trainLocalModel}>
+            {localModelLoading ? "Trainiere" : "Modell trainieren"}
+          </button>
+          <button style={s.resetBtn} onClick={runUserPipeline}>
+            {pipelineLoading ? "Läuft" : "Pipeline laufen"}
+          </button>
+          {trainingBuild && (
+            <div style={s.trainingStats}>
+              <span>{trainingBuild.status}</span>
+              <span>{trainingBuild.example_count} Beispiele</span>
+              <span>{trainingBuild.rhyme_pair_count} Reimpaare</span>
+              <span>{trainingBuild.quote_count} Quotes</span>
+              <span>{trainingBuild.text_line_count} Zeilen</span>
+              <span>{trainingBuild.output_path}</span>
+            </div>
+          )}
+          {localModelTrain && (
+            <div style={s.trainingStats}>
+              <span>{localModelTrain.status}</span>
+              <span>{localModelTrain.pair_count} Paare</span>
+              {localModelTrain.ideal_syllables && <span>{localModelTrain.ideal_syllables} Ideal-Silben</span>}
+              <span>{localModelTrain.model_path}</span>
+            </div>
+          )}
+          {pipelineResponse && (
+            <div style={s.trainingStats}>
+              <span>Pipeline: {pipelineResponse.status}</span>
+              <span>{pipelineResponse.import.imported_count} Importe</span>
+              <span>{pipelineResponse.training.example_count} Trainingsbeispiele</span>
+              <span>{pipelineResponse.model.pair_count} Modellpaare</span>
+              <span>{pipelineResponse.search.results.length} trainierte Treffer</span>
+            </div>
+          )}
+        </div>
       </section>
 
       {/* ── Eingabe ── */}
@@ -661,6 +953,9 @@ const s = {
   sectionTitle: {
     color: "#ddd", fontSize: "1rem", margin: "0 0 0.6rem 0",
   } as React.CSSProperties,
+  subSectionTitle: {
+    color: "#aaa", fontSize: "0.86rem", margin: "0.9rem 0 0.45rem 0",
+  } as React.CSSProperties,
   row: { display: "flex", gap: "0.5rem", marginBottom: "0.75rem" } as React.CSSProperties,
   input: {
     flex: 1, padding: "0.7rem 1rem", fontSize: "1.1rem",
@@ -775,6 +1070,30 @@ const s = {
     padding: "0.55rem 0.65rem",
     color: "#ccc",
     fontSize: "0.75rem",
+  } as React.CSSProperties,
+  libraryGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+    gap: "1rem",
+    marginTop: "1rem",
+  } as React.CSSProperties,
+  trainingBox: {
+    display: "flex",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: "0.75rem",
+    flexWrap: "wrap" as const,
+    borderTop: "1px solid #242424",
+    marginTop: "1rem",
+    paddingTop: "0.75rem",
+  } as React.CSSProperties,
+  trainingStats: {
+    display: "flex",
+    flexWrap: "wrap" as const,
+    gap: "0.4rem",
+    width: "100%",
+    color: "#777",
+    fontSize: "0.74rem",
   } as React.CSSProperties,
   compactLabel: {
     display: "flex",

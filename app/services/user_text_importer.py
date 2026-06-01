@@ -22,6 +22,8 @@ INBOX_DIR = DATA_ROOT / "inbox"
 EXTRACTED_DIR = DATA_ROOT / "extracted"
 DB_PATH = DATA_ROOT / "rhyme_database.sqlite"
 SUMMARY_PATH = DATA_ROOT / "import_summary.json"
+TRAINING_DIR = DATA_ROOT / "training"
+TRAINING_JSONL_PATH = TRAINING_DIR / "rhyme_training.jsonl"
 
 WORD_RE = re.compile(r"[A-Za-zÄÖÜäöüß]+")
 TEXT_FRAGMENT_RE = re.compile(
@@ -83,6 +85,20 @@ class RhymePairSample:
 
 
 @dataclass
+class QuoteEntry:
+    id: int
+    source_id: str
+    source_title: str
+    line_no: int
+    text: str
+    phrase: str
+    syllable_count: int
+    quote_score: float
+    terminal_anchor: str
+    reason: str
+
+
+@dataclass
 class UserTextDatabaseSummary:
     inbox_dir: str
     extracted_dir: str
@@ -93,8 +109,10 @@ class UserTextDatabaseSummary:
     line_count: int
     rhyme_unit_count: int
     rhyme_pair_count: int
+    quote_count: int
     documents: List[ImportedDocumentInfo] = field(default_factory=list)
     sample_pairs: List[RhymePairSample] = field(default_factory=list)
+    sample_quotes: List[QuoteEntry] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
 
 
@@ -383,9 +401,67 @@ def _build_units(source_id: str, source_title: str, lines: List[str], start_id: 
     return units
 
 
+def _quote_score(line: str, unit: RhymeUnit) -> tuple[float, str]:
+    words = WORD_RE.findall(line)
+    word_count = len(words)
+    if word_count < 3:
+        return 0.0, "zu kurz"
+
+    length_fit = 1.0
+    if word_count < 5:
+        length_fit = 0.72
+    elif word_count > 14:
+        length_fit = max(0.45, 1.0 - ((word_count - 14) * 0.06))
+
+    phrase_fit = 1.0 if 4 <= unit.syllable_count <= 6 else 0.84
+    terminal_fit = 1.0 if unit.terminal_anchor else 0.45
+    density = min(1.0, unit.word_count / max(word_count, 1) * 2.5)
+    punctuation_lift = 0.06 if re.search(r"[!?;:]", line) else 0.0
+    contrast_lift = 0.05 if re.search(r"\b(aber|doch|nur|wenn|weil|gegen|ohne|mit)\b", line, re.I) else 0.0
+
+    score = (
+        length_fit * 0.30
+        + phrase_fit * 0.25
+        + terminal_fit * 0.20
+        + density * 0.15
+        + min(0.10, punctuation_lift + contrast_lift)
+    )
+    reasons = [
+        f"{word_count} Worte",
+        f"{unit.syllable_count} Endsilben",
+        "Terminal-Anker" if unit.terminal_anchor else "ohne Terminal-Anker",
+    ]
+    return round(min(score, 0.9999), 4), ", ".join(reasons)
+
+
+def _build_quotes(units: List[RhymeUnit]) -> List[QuoteEntry]:
+    quotes: List[QuoteEntry] = []
+    for idx, unit in enumerate(units, 1):
+        score, reason = _quote_score(unit.line_text, unit)
+        if score < 0.56:
+            continue
+        quotes.append(
+            QuoteEntry(
+                id=idx,
+                source_id=unit.source_id,
+                source_title=unit.source_title,
+                line_no=unit.line_no,
+                text=unit.line_text,
+                phrase=unit.phrase,
+                syllable_count=unit.syllable_count,
+                quote_score=score,
+                terminal_anchor=unit.terminal_anchor,
+                reason=reason,
+            )
+        )
+    return sorted(quotes, key=lambda quote: quote.quote_score, reverse=True)
+
+
 def _create_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
+        drop table if exists quote_entries;
+        drop table if exists text_entries;
         drop table if exists rhyme_pairs;
         drop table if exists rhyme_units;
         drop table if exists lines;
@@ -408,6 +484,17 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             source_id text not null,
             line_no integer not null,
             text text not null
+        );
+
+        create table text_entries (
+            id integer primary key autoincrement,
+            source_id text not null,
+            source_title text not null,
+            line_no integer not null,
+            text text not null,
+            normalized_text text not null,
+            word_count integer not null,
+            char_count integer not null
         );
 
         create table rhyme_units (
@@ -438,9 +525,25 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             cadence real not null
         );
 
+        create table quote_entries (
+            id integer primary key,
+            source_id text not null,
+            source_title text not null,
+            line_no integer not null,
+            text text not null,
+            phrase text not null,
+            syllable_count integer not null,
+            quote_score real not null,
+            terminal_anchor text not null,
+            reason text not null
+        );
+
+        create index idx_text_entries_text on text_entries(normalized_text);
+        create index idx_text_entries_source on text_entries(source_id, line_no);
         create index idx_units_family on rhyme_units(terminal_vowel_family);
         create index idx_units_source on rhyme_units(source_id, line_no);
         create index idx_pairs_score on rhyme_pairs(score desc);
+        create index idx_quotes_score on quote_entries(quote_score desc);
         """
     )
 
@@ -450,6 +553,7 @@ def _write_database(
     documents: List[ImportedDocumentInfo],
     doc_lines: Dict[str, List[str]],
     units: List[RhymeUnit],
+    quotes: List[QuoteEntry],
     context_radius: int,
 ) -> List[RhymePairSample]:
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -478,6 +582,27 @@ def _write_database(
             for line_no, line in enumerate(lines, 1)
         ]
         conn.executemany("insert into lines (source_id, line_no, text) values (?, ?, ?)", line_rows)
+        title_by_source = {doc.source_id: doc.title for doc in documents}
+        conn.executemany(
+            """
+            insert into text_entries (
+                source_id, source_title, line_no, text, normalized_text,
+                word_count, char_count
+            ) values (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    source_id,
+                    title_by_source.get(source_id, ""),
+                    line_no,
+                    line,
+                    line.lower(),
+                    len(WORD_RE.findall(line)),
+                    len(line),
+                )
+                for source_id, line_no, line in line_rows
+            ],
+        )
         conn.executemany(
             """
             insert into rhyme_units (
@@ -494,6 +619,22 @@ def _write_database(
                     unit.terminal_vowel_family, unit.terminal_tail, unit.phrase_vowels,
                 )
                 for unit in units
+            ],
+        )
+        conn.executemany(
+            """
+            insert into quote_entries (
+                id, source_id, source_title, line_no, text, phrase,
+                syllable_count, quote_score, terminal_anchor, reason
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    quote.id, quote.source_id, quote.source_title, quote.line_no,
+                    quote.text, quote.phrase, quote.syllable_count,
+                    quote.quote_score, quote.terminal_anchor, quote.reason,
+                )
+                for quote in quotes
             ],
         )
 
@@ -600,7 +741,8 @@ def refresh_user_text_database(
             )
         )
 
-    sample_pairs = _write_database(db_path, documents, doc_lines, units, context_radius)
+    quotes = _build_quotes(units)
+    sample_pairs = _write_database(db_path, documents, doc_lines, units, quotes, context_radius)
 
     summary = UserTextDatabaseSummary(
         inbox_dir=str(inbox_dir),
@@ -612,8 +754,10 @@ def refresh_user_text_database(
         line_count=sum(doc.line_count for doc in documents),
         rhyme_unit_count=len(units),
         rhyme_pair_count=_count_rows(db_path, "rhyme_pairs"),
+        quote_count=_count_rows(db_path, "quote_entries"),
         documents=documents,
         sample_pairs=sample_pairs,
+        sample_quotes=quotes[:12],
         warnings=warnings[:30],
     )
     summary_path.write_text(json.dumps(asdict(summary), ensure_ascii=False, indent=2) + "\n", "utf-8")
@@ -643,11 +787,16 @@ def load_user_text_summary(data_root: Path = DATA_ROOT) -> Dict[str, Any]:
             "line_count": 0,
             "rhyme_unit_count": 0,
             "rhyme_pair_count": 0,
+            "quote_count": 0,
             "documents": [],
             "sample_pairs": [],
+            "sample_quotes": [],
             "warnings": ["Noch kein Import gelaufen."],
         }
-    return json.loads(summary_path.read_text("utf-8"))
+    summary = json.loads(summary_path.read_text("utf-8"))
+    summary.setdefault("quote_count", 0)
+    summary.setdefault("sample_quotes", [])
+    return summary
 
 
 def _syllable_fit(query_syllables: int, candidate_syllables: int) -> float:
@@ -800,4 +949,301 @@ def search_user_rhymes(
         "total_candidates": len(rows),
         "retrieved_candidates": len(results),
         "rerank": rerank_info,
+    }
+
+
+def search_text_library(
+    query: str,
+    db_path: Path = DB_PATH,
+    limit: int = 30,
+) -> Dict[str, Any]:
+    if not db_path.exists():
+        return {"query": query, "results": [], "warning": "Textbibliothek fehlt. Erst importieren."}
+
+    terms = [term.lower() for term in WORD_RE.findall(query)]
+    if not terms:
+        return {"query": query, "results": [], "total_candidates": 0}
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """
+            select source_title, line_no, text, word_count, char_count
+            from text_entries
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    results: List[Dict[str, Any]] = []
+    for row in rows:
+        text_lower = str(row["text"]).lower()
+        hits = sum(1 for term in terms if term in text_lower)
+        if hits == 0:
+            continue
+        exact_lift = 0.25 if query.lower().strip() in text_lower else 0.0
+        density = hits / max(len(terms), 1)
+        length_fit = 1.0 if row["word_count"] <= 16 else max(0.55, 1.0 - ((row["word_count"] - 16) * 0.03))
+        score = round(min(0.9999, (density * 0.68) + (length_fit * 0.07) + exact_lift), 4)
+        results.append(
+            {
+                "source_title": row["source_title"],
+                "line_no": row["line_no"],
+                "text": row["text"],
+                "word_count": row["word_count"],
+                "char_count": row["char_count"],
+                "score": score,
+                "matched_terms": hits,
+            }
+        )
+
+    results.sort(key=lambda item: (item["score"], item["matched_terms"]), reverse=True)
+    return {
+        "query": query,
+        "results": results[:limit],
+        "total_candidates": len(rows),
+        "retrieved_candidates": len(results),
+    }
+
+
+def search_quote_library(
+    query: str,
+    db_path: Path = DB_PATH,
+    limit: int = 30,
+    min_score: float = 0.0,
+) -> Dict[str, Any]:
+    if not db_path.exists():
+        return {"query": query, "results": [], "warning": "Quote-Bibliothek fehlt. Erst importieren."}
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """
+            select source_title, line_no, text, phrase, syllable_count,
+                   quote_score, terminal_anchor, reason
+            from quote_entries
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    terms = [term.lower() for term in WORD_RE.findall(query)]
+    results: List[Dict[str, Any]] = []
+    for row in rows:
+        rhyme_fit = 0.0
+        rhyme_reason = ""
+        if query.strip():
+            try:
+                rhyme = score_rhyme(query, row["phrase"])
+                rhyme_fit = _personal_phrase_score(
+                    rhyme,
+                    PhraseFeatures.from_phrase(query).syllable_count,
+                    row["syllable_count"],
+                    len(WORD_RE.findall(row["phrase"])),
+                )
+                rhyme_reason = rhyme.reason
+            except Exception:
+                rhyme_fit = 0.0
+
+        text_lower = str(row["text"]).lower()
+        lexical_fit = sum(1 for term in terms if term in text_lower) / max(len(terms), 1) if terms else 0.0
+        final_score = round(
+            min(0.9999, (row["quote_score"] * 0.52) + (rhyme_fit * 0.36) + (lexical_fit * 0.12)),
+            4,
+        )
+        if final_score < min_score:
+            continue
+        results.append(
+            {
+                "source_title": row["source_title"],
+                "line_no": row["line_no"],
+                "text": row["text"],
+                "phrase": row["phrase"],
+                "syllable_count": row["syllable_count"],
+                "quote_score": row["quote_score"],
+                "rhyme_score": rhyme_fit,
+                "score": final_score,
+                "terminal_anchor": row["terminal_anchor"],
+                "reason": row["reason"],
+                "rhyme_reason": rhyme_reason,
+            }
+        )
+
+    results.sort(key=lambda item: (item["score"], item["rhyme_score"], item["quote_score"]), reverse=True)
+    return {
+        "query": query,
+        "results": results[:limit],
+        "total_candidates": len(rows),
+        "retrieved_candidates": len(results),
+    }
+
+
+def _training_example(kind: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "kind": kind,
+        "version": 1,
+        **payload,
+    }
+
+
+def build_training_dataset(
+    db_path: Path = DB_PATH,
+    output_path: Path = TRAINING_JSONL_PATH,
+    max_examples: int = 2000,
+    include_text_lines: bool = True,
+) -> Dict[str, Any]:
+    """Build a private local JSONL dataset for rhyme/quote reranker training."""
+    if not db_path.exists():
+        return {
+            "status": "missing_database",
+            "output_path": str(output_path),
+            "example_count": 0,
+            "rhyme_pair_count": 0,
+            "quote_count": 0,
+            "text_line_count": 0,
+            "warning": "Reimdatenbank fehlt. Erst importieren.",
+        }
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    max_examples = max(1, min(max_examples, 50000))
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    examples: List[Dict[str, Any]] = []
+    rhyme_pair_count = 0
+    quote_count = 0
+    text_line_count = 0
+    try:
+        pair_rows = conn.execute(
+            """
+            select
+                p.score, p.anchor, p.tail, p.vowel, p.cadence,
+                l.source_title as left_source_title,
+                l.line_no as left_line_no,
+                l.line_text as left_line_text,
+                l.phrase as left_phrase,
+                l.syllable_count as left_syllable_count,
+                r.source_title as right_source_title,
+                r.line_no as right_line_no,
+                r.line_text as right_line_text,
+                r.phrase as right_phrase,
+                r.syllable_count as right_syllable_count
+            from rhyme_pairs p
+            join rhyme_units l on l.id = p.left_unit_id
+            join rhyme_units r on r.id = p.right_unit_id
+            order by p.score desc
+            limit ?
+            """,
+            (max_examples,),
+        ).fetchall()
+
+        for row in pair_rows:
+            examples.append(
+                _training_example(
+                    "rhyme_pair",
+                    {
+                        "query": row["left_phrase"],
+                        "positive": row["right_phrase"],
+                        "query_context": row["left_line_text"],
+                        "positive_context": row["right_line_text"],
+                        "source_title": row["left_source_title"],
+                        "line_nos": [row["left_line_no"], row["right_line_no"]],
+                        "syllables": [row["left_syllable_count"], row["right_syllable_count"]],
+                        "scores": {
+                            "total": row["score"],
+                            "anchor": row["anchor"],
+                            "tail": row["tail"],
+                            "vowel": row["vowel"],
+                            "cadence": row["cadence"],
+                        },
+                        "instruction": (
+                            "Rankiere den positiven Kandidaten hoch, weil er als persoenlicher "
+                            "Phrase-Level-Endreim im lokalen Kontext funktioniert."
+                        ),
+                    },
+                )
+            )
+        rhyme_pair_count = len(pair_rows)
+
+        remaining = max_examples - len(examples)
+        if remaining > 0:
+            quote_rows = conn.execute(
+                """
+                select source_title, line_no, text, phrase, syllable_count,
+                       quote_score, terminal_anchor, reason
+                from quote_entries
+                order by quote_score desc
+                limit ?
+                """,
+                (remaining,),
+            ).fetchall()
+            for row in quote_rows:
+                examples.append(
+                    _training_example(
+                        "quote_candidate",
+                        {
+                            "query": row["phrase"],
+                            "quote": row["text"],
+                            "source_title": row["source_title"],
+                            "line_no": row["line_no"],
+                            "syllable_count": row["syllable_count"],
+                            "terminal_anchor": row["terminal_anchor"],
+                            "score": row["quote_score"],
+                            "reason": row["reason"],
+                            "instruction": (
+                                "Erkenne diese Zeile als zitierfaehigen lokalen Textanker "
+                                "mit brauchbarem Endreim-Fenster."
+                            ),
+                        },
+                    )
+                )
+            quote_count = len(quote_rows)
+
+        remaining = max_examples - len(examples)
+        if include_text_lines and remaining > 0:
+            text_rows = conn.execute(
+                """
+                select source_title, line_no, text, word_count, char_count
+                from text_entries
+                where word_count between 4 and 18
+                order by source_id, line_no
+                limit ?
+                """,
+                (remaining,),
+            ).fetchall()
+            for row in text_rows:
+                examples.append(
+                    _training_example(
+                        "text_line",
+                        {
+                            "text": row["text"],
+                            "source_title": row["source_title"],
+                            "line_no": row["line_no"],
+                            "word_count": row["word_count"],
+                            "char_count": row["char_count"],
+                            "instruction": (
+                                "Nutze diese persoenliche Zeile als lokalen Stil- und Flow-Kontext, "
+                                "nicht als allgemeine Wortliste."
+                            ),
+                        },
+                    )
+                )
+            text_line_count = len(text_rows)
+    finally:
+        conn.close()
+
+    with output_path.open("w", encoding="utf-8") as handle:
+        for example in examples:
+            handle.write(json.dumps(example, ensure_ascii=False, sort_keys=True) + "\n")
+
+    return {
+        "status": "ok",
+        "output_path": str(output_path),
+        "example_count": len(examples),
+        "rhyme_pair_count": rhyme_pair_count,
+        "quote_count": quote_count,
+        "text_line_count": text_line_count,
+        "warning": "",
     }

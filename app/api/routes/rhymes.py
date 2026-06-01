@@ -103,6 +103,31 @@ class UserTextSearchRequest(BaseModel):
     include_context_in_rerank: bool = False
 
 
+class UserLibrarySearchRequest(BaseModel):
+    query: str
+    limit: int = Field(30, ge=1, le=100)
+    min_score: float = Field(0.0, ge=0.0, le=1.0)
+
+
+class UserTrainingBuildRequest(BaseModel):
+    max_examples: int = Field(2000, ge=1, le=50000)
+    include_text_lines: bool = True
+
+
+class UserModelTrainRequest(BaseModel):
+    min_pair_score: float = Field(0.58, ge=0.0, le=1.0)
+
+
+class UserPipelineRunRequest(BaseModel):
+    query: str = "schattenkabinett"
+    prefer_pages_export: bool = True
+    context_radius: int = Field(12, ge=1, le=64)
+    max_examples: int = Field(2000, ge=1, le=50000)
+    min_pair_score: float = Field(0.58, ge=0.0, le=1.0)
+    limit: int = Field(25, ge=1, le=100)
+    min_score: float = Field(0.40, ge=0.0, le=1.0)
+
+
 @router.post("/rank-phrases", response_model=PhraseRankResponse)
 async def rank_phrases(request: PhraseRankRequest):
     """
@@ -206,6 +231,79 @@ async def search_user_texts(request: UserTextSearchRequest):
             rerank=request.rerank,
             rerank_candidate_count=request.rerank_candidate_count,
             include_context_in_rerank=request.include_context_in_rerank,
+        )
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/user-texts/search-lines")
+async def search_user_text_lines(request: UserLibrarySearchRequest):
+    """Durchsucht die importierte Textbibliothek nach Zeilen und Fragmenten."""
+    try:
+        from app.services.user_text_importer import search_text_library
+
+        return search_text_library(
+            query=request.query,
+            limit=request.limit,
+        )
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/user-texts/search-quotes")
+async def search_user_quotes(request: UserLibrarySearchRequest):
+    """Rankt quotierbare Zeilen aus der lokalen Quote-Bibliothek."""
+    try:
+        from app.services.user_text_importer import search_quote_library
+
+        return search_quote_library(
+            query=request.query,
+            limit=request.limit,
+            min_score=request.min_score,
+        )
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/user-texts/build-training")
+async def build_user_training(request: UserTrainingBuildRequest):
+    """Erzeugt lokal ignorierte JSONL-Trainingsbeispiele aus User-Bibliotheken."""
+    try:
+        from app.services.user_text_importer import build_training_dataset
+
+        return build_training_dataset(
+            max_examples=request.max_examples,
+            include_text_lines=request.include_text_lines,
+        )
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/user-texts/train-local-model")
+async def train_user_local_model(request: UserModelTrainRequest):
+    """Kalibriert ein lokales, git-ignoriertes Reimranking-Modell."""
+    try:
+        from app.services.local_rhyme_model import train_local_rhyme_model
+
+        return train_local_rhyme_model(min_pair_score=request.min_pair_score)
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/user-texts/pipeline")
+async def run_user_pipeline(request: UserPipelineRunRequest):
+    """Importiert, exportiert Trainingsdaten, trainiert lokal und sucht trainiert."""
+    try:
+        from app.services.personal_rhyme_pipeline import run_personal_rhyme_pipeline
+
+        return run_personal_rhyme_pipeline(
+            query=request.query,
+            prefer_pages_export=request.prefer_pages_export,
+            context_radius=request.context_radius,
+            max_examples=request.max_examples,
+            min_pair_score=request.min_pair_score,
+            limit=request.limit,
+            min_score=request.min_score,
         )
     except Exception as e:
         raise HTTPException(400, str(e))

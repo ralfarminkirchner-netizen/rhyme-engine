@@ -6,6 +6,11 @@ import type {
   RhymeHighlightResponse,
   SearchRequest,
   SearchResponse,
+  UserLocalModelTrainResponse,
+  UserPipelineResponse,
+  UserQuoteSearchResponse,
+  UserTrainingBuildResponse,
+  UserTextLineSearchResponse,
   UserRhymeSearchResponse,
   UserTextSummary,
 } from "../types";
@@ -57,4 +62,22 @@ export const api = {
     include_context_in_rerank?: boolean;
   }) =>
     post<UserRhymeSearchResponse>("/api/rhymes/user-texts/search", req),
+  searchUserTextLines: (req: { query: string; limit?: number }) =>
+    post<UserTextLineSearchResponse>("/api/rhymes/user-texts/search-lines", req),
+  searchUserQuotes: (req: { query: string; limit?: number; min_score?: number }) =>
+    post<UserQuoteSearchResponse>("/api/rhymes/user-texts/search-quotes", req),
+  buildUserTraining: (req: { max_examples?: number; include_text_lines?: boolean }) =>
+    post<UserTrainingBuildResponse>("/api/rhymes/user-texts/build-training", req),
+  trainLocalModel: (req: { min_pair_score?: number }) =>
+    post<UserLocalModelTrainResponse>("/api/rhymes/user-texts/train-local-model", req),
+  runUserPipeline: (req: {
+    query?: string;
+    prefer_pages_export?: boolean;
+    context_radius?: number;
+    max_examples?: number;
+    min_pair_score?: number;
+    limit?: number;
+    min_score?: number;
+  }) =>
+    post<UserPipelineResponse>("/api/rhymes/user-texts/pipeline", req),
 };

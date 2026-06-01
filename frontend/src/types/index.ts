@@ -181,6 +181,19 @@ export interface UserTextPairSample {
   right_line_no: number;
 }
 
+export interface UserQuoteSample {
+  id: number;
+  source_id: string;
+  source_title: string;
+  line_no: number;
+  text: string;
+  phrase: string;
+  syllable_count: number;
+  quote_score: number;
+  terminal_anchor: string;
+  reason: string;
+}
+
 export interface UserTextSummary {
   inbox_dir: string;
   extracted_dir: string;
@@ -191,8 +204,10 @@ export interface UserTextSummary {
   line_count: number;
   rhyme_unit_count: number;
   rhyme_pair_count: number;
+  quote_count: number;
   documents: UserTextDocument[];
   sample_pairs: UserTextPairSample[];
+  sample_quotes: UserQuoteSample[];
   warnings: string[];
 }
 
@@ -202,6 +217,8 @@ export interface UserRhymeResult {
   raw_score?: number;
   llm_score?: number;
   llm_reason?: string;
+  learned_score?: number;
+  learned_reason?: string;
   anchor: number;
   tail: number;
   vowel: number;
@@ -218,6 +235,8 @@ export interface UserRhymeRerankInfo {
   provider: string;
   warning?: string;
   candidate_count?: number;
+  model_pair_count?: number;
+  weights?: Record<string, number>;
 }
 
 export interface UserRhymeSearchResponse {
@@ -227,4 +246,77 @@ export interface UserRhymeSearchResponse {
   retrieved_candidates?: number;
   rerank?: UserRhymeRerankInfo;
   warning?: string;
+}
+
+export interface UserTextLineResult {
+  source_title: string;
+  line_no: number;
+  text: string;
+  word_count: number;
+  char_count: number;
+  score: number;
+  matched_terms: number;
+}
+
+export interface UserTextLineSearchResponse {
+  query: string;
+  results: UserTextLineResult[];
+  total_candidates: number;
+  retrieved_candidates?: number;
+  warning?: string;
+}
+
+export interface UserQuoteResult {
+  source_title: string;
+  line_no: number;
+  text: string;
+  phrase: string;
+  syllable_count: number;
+  quote_score: number;
+  rhyme_score: number;
+  score: number;
+  terminal_anchor: string;
+  reason: string;
+  rhyme_reason?: string;
+}
+
+export interface UserQuoteSearchResponse {
+  query: string;
+  results: UserQuoteResult[];
+  total_candidates: number;
+  retrieved_candidates?: number;
+  warning?: string;
+}
+
+export interface UserTrainingBuildResponse {
+  status: string;
+  output_path: string;
+  example_count: number;
+  rhyme_pair_count: number;
+  quote_count: number;
+  text_line_count: number;
+  warning: string;
+}
+
+export interface UserLocalModelTrainResponse {
+  status: string;
+  model_path: string;
+  pair_count: number;
+  weights?: Record<string, number>;
+  ideal_syllables?: number;
+  warning: string;
+}
+
+export interface UserPipelineResponse {
+  status: string;
+  query: string;
+  import: UserTextSummary;
+  training: UserTrainingBuildResponse;
+  model: UserLocalModelTrainResponse;
+  search: {
+    total_candidates: number;
+    retrieved_candidates: number;
+    rerank: UserRhymeRerankInfo;
+    results: UserRhymeResult[];
+  };
 }

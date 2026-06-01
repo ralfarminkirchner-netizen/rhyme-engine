@@ -147,8 +147,16 @@ def rerank_rhymes(query: str, candidates: List[Dict[str, Any]]) -> Dict[str, Any
     if provider == "fake":
         return rerank_with_fake(query, candidates)
 
+    if provider == "local":
+        from app.services.local_rhyme_model import rerank_with_local_model
+        return rerank_with_local_model(query, candidates)
+
     if os.getenv("GEMINI_API_KEY"):
         return rerank_with_gemini(query, candidates)
+
+    from app.services.local_rhyme_model import load_local_rhyme_model, rerank_with_local_model
+    if load_local_rhyme_model():
+        return rerank_with_local_model(query, candidates)
 
     # Fallback to existing command reranker if any
     try:

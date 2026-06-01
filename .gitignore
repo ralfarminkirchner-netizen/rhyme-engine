@@ -20,6 +20,7 @@ app/data/*.zip
 app/data/_leipzig_tmp/
 app/data/user_texts/inbox/*
 app/data/user_texts/extracted/*
+app/data/user_texts/training/*
 app/data/user_texts/*.sqlite
 app/data/user_texts/import_summary.json
 !app/data/user_texts/.gitkeep
