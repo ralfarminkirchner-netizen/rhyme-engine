@@ -554,35 +554,39 @@ export default function RhymeSearch() {
 
       <section style={s.panelFirst}>
         <h2 style={s.sectionTitle}>Silben-Reimkarte</h2>
-        <div style={s.mapControls}>
-          <button style={s.searchBtn} onClick={() => highlightRhymes()}>
-            {highlightLoading ? "⏳" : "Reime markieren"}
-          </button>
-          <label style={s.compactLabel}>
-            Umgebung
-            <input
-              type="range"
-              min={1}
-              max={16}
-              step={1}
-              value={contextRadius}
-              onChange={(e) => setContextRadius(parseInt(e.target.value, 10))}
-            />
-            <span style={s.wVal}>{contextRadius}</span>
-          </label>
-        </div>
-        <textarea
-          style={s.textarea}
-          value={highlightText}
-          onChange={(e) => setHighlightText(e.target.value)}
-          rows={8}
-        />
-        {highlightError && <div style={s.errorBox}>⚠️ {highlightError}</div>}
-        {highlightResponse && <RhymeHeatmap analysis={highlightResponse} />}
+        <details style={s.details}>
+          <summary style={s.summary}>Reimkarte öffnen</summary>
+          <div style={s.mapControls}>
+            <button style={s.searchBtn} onClick={() => highlightRhymes()}>
+              {highlightLoading ? "⏳" : "Reime markieren"}
+            </button>
+            <label style={s.compactLabel}>
+              Umgebung
+              <input
+                type="range"
+                min={1}
+                max={16}
+                step={1}
+                value={contextRadius}
+                onChange={(e) => setContextRadius(parseInt(e.target.value, 10))}
+              />
+              <span style={s.wVal}>{contextRadius}</span>
+            </label>
+          </div>
+          <textarea
+            style={s.textarea}
+            value={highlightText}
+            onChange={(e) => setHighlightText(e.target.value)}
+            rows={8}
+          />
+          {highlightError && <div style={s.errorBox}>⚠️ {highlightError}</div>}
+          {highlightResponse && <RhymeHeatmap analysis={highlightResponse} />}
+        </details>
       </section>
 
       <section style={s.panel}>
-        <h2 style={s.sectionTitle}>Deine Reimdatenbank</h2>
+        <h2 style={s.sectionTitle}>Deine Bibliotheken</h2>
+        <h3 style={s.subSectionTitle}>Reimbibliothek</h3>
         <div style={s.mapControls}>
           <button style={s.searchBtn} onClick={importUserTexts}>
             {userImporting ? "Import läuft" : "Inbox importieren"}
