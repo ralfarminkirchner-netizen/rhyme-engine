@@ -2,6 +2,7 @@ from pathlib import Path
 
 from app.services.user_text_importer import (
     build_training_dataset,
+    load_full_user_library,
     load_user_text_summary,
     refresh_user_text_database,
     search_quote_library,
@@ -237,3 +238,50 @@ def test_build_training_dataset_reports_missing_database(tmp_path: Path):
     assert summary["status"] == "missing_database"
     assert summary["example_count"] == 0
     assert not (tmp_path / "training.jsonl").exists()
+
+
+def test_load_full_user_library_returns_all_library_lists(tmp_path: Path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    (inbox / "rap.txt").write_text(
+        "\n".join(
+            [
+                "nachts wach lieg im Bett",
+                "absichtlich erschreckt",
+                "lass die finger weg",
+                "machen wir es jetzt",
+                "wackeliges brett",
+                "plastik im besteck",
+            ]
+        )
+        + "\n",
+        "utf-8",
+    )
+    refresh_user_text_database(
+        inbox_dir=inbox,
+        data_root=tmp_path,
+        prefer_pages_export=False,
+    )
+
+    library = load_full_user_library(
+        db_path=tmp_path / "rhyme_database.sqlite",
+        limit=20,
+    )
+
+    assert library["status"] == "ok"
+    assert library["counts"]["text_lines"] == 6
+    assert library["counts"]["rhyme_units"] > 0
+    assert library["counts"]["rhyme_pairs"] > 0
+    assert library["counts"]["quotes"] > 0
+    assert library["text_lines"]
+    assert library["rhyme_units"]
+    assert library["rhyme_pairs"]
+    assert library["quotes"]
+
+
+def test_load_full_user_library_reports_missing_database(tmp_path: Path):
+    library = load_full_user_library(db_path=tmp_path / "missing.sqlite")
+
+    assert library["status"] == "missing_database"
+    assert library["counts"]["text_lines"] == 0
+    assert library["text_lines"] == []

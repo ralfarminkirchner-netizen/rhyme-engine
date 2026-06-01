@@ -10,6 +10,7 @@ import type {
   RhymeHighlightResponse,
   RawWeights,
   SearchResponse,
+  UserFullLibraryResponse,
   UserLocalModelTrainResponse,
   UserPipelineResponse,
   UserQuoteResult,
@@ -330,6 +331,8 @@ export default function RhymeSearch() {
   const [useTrainedRerank, setUseTrainedRerank] = useState(false);
   const [pipelineResponse, setPipelineResponse] = useState<UserPipelineResponse | null>(null);
   const [pipelineLoading, setPipelineLoading] = useState(false);
+  const [fullLibrary, setFullLibrary] = useState<UserFullLibraryResponse | null>(null);
+  const [fullLibraryLoading, setFullLibraryLoading] = useState(false);
 
   const isTerminal = response?.target === "terminal";
 
@@ -408,6 +411,19 @@ export default function RhymeSearch() {
       setUserTextError(String(e));
     } finally {
       setUserImporting(false);
+    }
+  }, []);
+
+  const loadFullLibrary = useCallback(async () => {
+    setFullLibraryLoading(true);
+    setUserTextError(null);
+    try {
+      const library = await api.loadUserLibrary({ limit: 500 });
+      setFullLibrary(library);
+    } catch (e) {
+      setUserTextError(String(e));
+    } finally {
+      setFullLibraryLoading(false);
     }
   }, []);
 
@@ -591,6 +607,9 @@ export default function RhymeSearch() {
           <button style={s.searchBtn} onClick={importUserTexts}>
             {userImporting ? "Import läuft" : "Inbox importieren"}
           </button>
+          <button style={s.searchBtn} onClick={loadFullLibrary}>
+            {fullLibraryLoading ? "Lade" : "Alle Bibliotheken laden"}
+          </button>
           <input
             style={s.input}
             value={userRhymeQuery}
@@ -649,6 +668,106 @@ export default function RhymeSearch() {
               </div>
             )}
           </>
+        )}
+        {fullLibrary && (
+          <div style={s.fullLibrary}>
+            {fullLibrary.warning && <div style={s.errorBox}>{fullLibrary.warning}</div>}
+            <div style={s.statGrid}>
+              <div style={s.statBox}><b>{fullLibrary.counts.text_lines}</b><span>alle Textzeilen</span></div>
+              <div style={s.statBox}><b>{fullLibrary.counts.rhyme_units}</b><span>alle Reim-Units</span></div>
+              <div style={s.statBox}><b>{fullLibrary.counts.rhyme_pairs}</b><span>alle Reimpaare</span></div>
+              <div style={s.statBox}><b>{fullLibrary.counts.quotes}</b><span>alle Quotes</span></div>
+            </div>
+
+            <h3 style={s.subSectionTitle}>Alle Reimpaare aller Texte</h3>
+            {fullLibrary.rhyme_pairs.length > 0 ? (
+              <table style={s.table}>
+                <thead>
+                  <tr>
+                    {["#","Links","Rechts","Score","Quelle"].map((h) => <th key={h} style={s.th}>{h}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {fullLibrary.rhyme_pairs.map((pair, i) => (
+                    <tr key={`${pair.source_title}-${pair.left_line_no}-${pair.right_line_no}-${i}`} style={{ background: i % 2 === 0 ? "#0f0f0f" : "#121212" }}>
+                      <td style={s.td}>{i + 1}</td>
+                      <td style={{ ...s.td, color: "#fff", fontWeight: 700 }}>{pair.left_phrase}</td>
+                      <td style={{ ...s.td, color: "#fff", fontWeight: 700 }}>{pair.right_phrase}</td>
+                      <td style={s.td}>{pair.score.toFixed(3)}</td>
+                      <td style={s.td}>{pair.source_title}:{pair.left_line_no}-{pair.right_line_no}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : <div style={s.noResults}>Keine Reimpaare. Erst Texte importieren.</div>}
+
+            <h3 style={s.subSectionTitle}>Alle Reim-Units</h3>
+            {fullLibrary.rhyme_units.length > 0 ? (
+              <table style={s.table}>
+                <thead>
+                  <tr>
+                    {["#","Phrase","Sil.","Anchor","Quelle","Zeile"].map((h) => <th key={h} style={s.th}>{h}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {fullLibrary.rhyme_units.map((unit, i) => (
+                    <tr key={`${unit.source_title}-${unit.line_no}-${unit.phrase}-${i}`} style={{ background: i % 2 === 0 ? "#0f0f0f" : "#121212" }}>
+                      <td style={s.td}>{i + 1}</td>
+                      <td style={{ ...s.td, color: "#fff", fontWeight: 700 }}>{unit.phrase}</td>
+                      <td style={s.td}>{unit.syllable_count}</td>
+                      <td style={s.td}>{unit.terminal_anchor}</td>
+                      <td style={s.td}>{unit.source_title}</td>
+                      <td style={{ ...s.td, color: "#777", fontSize: "0.75rem" }}>{unit.line_text}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : <div style={s.noResults}>Keine Reim-Units. Erst Texte importieren.</div>}
+
+            <h3 style={s.subSectionTitle}>Alle Texte</h3>
+            {fullLibrary.text_lines.length > 0 ? (
+              <table style={s.table}>
+                <thead>
+                  <tr>
+                    {["#","Textzeile","Worte","Quelle","Nr."].map((h) => <th key={h} style={s.th}>{h}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {fullLibrary.text_lines.map((line, i) => (
+                    <tr key={`${line.source_title}-${line.line_no}-${i}`} style={{ background: i % 2 === 0 ? "#0f0f0f" : "#121212" }}>
+                      <td style={s.td}>{i + 1}</td>
+                      <td style={{ ...s.td, color: "#ddd" }}>{line.text}</td>
+                      <td style={s.td}>{line.word_count}</td>
+                      <td style={s.td}>{line.source_title}</td>
+                      <td style={s.td}>{line.line_no}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : <div style={s.noResults}>Keine Textzeilen. Erst Texte importieren.</div>}
+
+            <h3 style={s.subSectionTitle}>Alle Quotes</h3>
+            {fullLibrary.quotes.length > 0 ? (
+              <table style={s.table}>
+                <thead>
+                  <tr>
+                    {["#","Quote","Phrase","Score","Quelle"].map((h) => <th key={h} style={s.th}>{h}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {fullLibrary.quotes.map((quote, i) => (
+                    <tr key={`${quote.source_title}-${quote.line_no}-${i}`} style={{ background: i % 2 === 0 ? "#0f0f0f" : "#121212" }}>
+                      <td style={s.td}>{i + 1}</td>
+                      <td style={{ ...s.td, color: "#fff", fontWeight: 700 }}>{quote.text}</td>
+                      <td style={s.td}>{quote.phrase}</td>
+                      <td style={s.td}>{quote.quote_score.toFixed(3)}</td>
+                      <td style={s.td}>{quote.source_title}:{quote.line_no}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : <div style={s.noResults}>Keine Quotes. Erst Texte importieren.</div>}
+          </div>
         )}
         {userRhymeResponse && (
           <>
@@ -1080,6 +1199,13 @@ const s = {
     gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
     gap: "1rem",
     marginTop: "1rem",
+  } as React.CSSProperties,
+  fullLibrary: {
+    display: "grid",
+    gap: "0.75rem",
+    margin: "1rem 0",
+    paddingTop: "0.75rem",
+    borderTop: "1px solid #242424",
   } as React.CSSProperties,
   trainingBox: {
     display: "flex",

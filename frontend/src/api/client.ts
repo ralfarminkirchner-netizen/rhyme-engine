@@ -6,6 +6,7 @@ import type {
   RhymeHighlightResponse,
   SearchRequest,
   SearchResponse,
+  UserFullLibraryResponse,
   UserLocalModelTrainResponse,
   UserPipelineResponse,
   UserQuoteSearchResponse,
@@ -66,6 +67,8 @@ export const api = {
     post<UserTextLineSearchResponse>("/api/rhymes/user-texts/search-lines", req),
   searchUserQuotes: (req: { query: string; limit?: number; min_score?: number }) =>
     post<UserQuoteSearchResponse>("/api/rhymes/user-texts/search-quotes", req),
+  loadUserLibrary: (req: { limit?: number }) =>
+    post<UserFullLibraryResponse>("/api/rhymes/user-texts/library", req),
   buildUserTraining: (req: { max_examples?: number; include_text_lines?: boolean }) =>
     post<UserTrainingBuildResponse>("/api/rhymes/user-texts/build-training", req),
   trainLocalModel: (req: { min_pair_score?: number }) =>

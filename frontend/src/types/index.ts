@@ -266,6 +266,63 @@ export interface UserTextLineSearchResponse {
   warning?: string;
 }
 
+export interface UserLibraryTextLine {
+  source_title: string;
+  line_no: number;
+  text: string;
+  word_count: number;
+  char_count: number;
+}
+
+export interface UserLibraryRhymeUnit {
+  source_title: string;
+  line_no: number;
+  phrase: string;
+  syllable_count: number;
+  terminal_anchor: string;
+  terminal_tail: string;
+  line_text: string;
+}
+
+export interface UserLibraryRhymePair {
+  source_title: string;
+  left_line_no: number;
+  left_phrase: string;
+  right_line_no: number;
+  right_phrase: string;
+  score: number;
+  anchor: number;
+  tail: number;
+  vowel: number;
+  cadence: number;
+}
+
+export interface UserLibraryQuote {
+  source_title: string;
+  line_no: number;
+  text: string;
+  phrase: string;
+  syllable_count: number;
+  quote_score: number;
+  terminal_anchor: string;
+  reason: string;
+}
+
+export interface UserFullLibraryResponse {
+  status: string;
+  warning: string;
+  counts: {
+    text_lines: number;
+    rhyme_units: number;
+    rhyme_pairs: number;
+    quotes: number;
+  };
+  text_lines: UserLibraryTextLine[];
+  rhyme_units: UserLibraryRhymeUnit[];
+  rhyme_pairs: UserLibraryRhymePair[];
+  quotes: UserLibraryQuote[];
+}
+
 export interface UserQuoteResult {
   source_title: string;
   line_no: number;

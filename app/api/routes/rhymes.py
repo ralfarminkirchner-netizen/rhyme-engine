@@ -109,6 +109,10 @@ class UserLibrarySearchRequest(BaseModel):
     min_score: float = Field(0.0, ge=0.0, le=1.0)
 
 
+class UserLibraryListRequest(BaseModel):
+    limit: int = Field(500, ge=1, le=5000)
+
+
 class UserTrainingBuildRequest(BaseModel):
     max_examples: int = Field(2000, ge=1, le=50000)
     include_text_lines: bool = True
@@ -261,6 +265,17 @@ async def search_user_quotes(request: UserLibrarySearchRequest):
             limit=request.limit,
             min_score=request.min_score,
         )
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/user-texts/library")
+async def load_user_library(request: UserLibraryListRequest):
+    """Laedt alle lokalen Bibliothekslisten: Texte, Reim-Units, Reimpaare, Quotes."""
+    try:
+        from app.services.user_text_importer import load_full_user_library
+
+        return load_full_user_library(limit=request.limit)
     except Exception as e:
         raise HTTPException(400, str(e))
 

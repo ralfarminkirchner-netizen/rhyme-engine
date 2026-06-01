@@ -1080,6 +1080,103 @@ def search_quote_library(
     }
 
 
+def load_full_user_library(
+    db_path: Path = DB_PATH,
+    limit: int = 500,
+) -> Dict[str, Any]:
+    if not db_path.exists():
+        return {
+            "status": "missing_database",
+            "warning": "Bibliotheken fehlen. Erst Texte in die Inbox legen und importieren.",
+            "counts": {"text_lines": 0, "rhyme_units": 0, "rhyme_pairs": 0, "quotes": 0},
+            "text_lines": [],
+            "rhyme_units": [],
+            "rhyme_pairs": [],
+            "quotes": [],
+        }
+
+    limit = max(1, min(limit, 5000))
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        text_lines = [
+            dict(row)
+            for row in conn.execute(
+                """
+                select source_title, line_no, text, word_count, char_count
+                from text_entries
+                order by source_title, line_no
+                limit ?
+                """,
+                (limit,),
+            ).fetchall()
+        ]
+        rhyme_units = [
+            dict(row)
+            for row in conn.execute(
+                """
+                select source_title, line_no, phrase, syllable_count,
+                       terminal_anchor, terminal_tail, line_text
+                from rhyme_units
+                order by source_title, line_no
+                limit ?
+                """,
+                (limit,),
+            ).fetchall()
+        ]
+        rhyme_pairs = [
+            dict(row)
+            for row in conn.execute(
+                """
+                select
+                    p.score, p.anchor, p.tail, p.vowel, p.cadence,
+                    l.source_title,
+                    l.line_no as left_line_no,
+                    l.phrase as left_phrase,
+                    r.line_no as right_line_no,
+                    r.phrase as right_phrase
+                from rhyme_pairs p
+                join rhyme_units l on l.id = p.left_unit_id
+                join rhyme_units r on r.id = p.right_unit_id
+                order by p.score desc
+                limit ?
+                """,
+                (limit,),
+            ).fetchall()
+        ]
+        quotes = [
+            dict(row)
+            for row in conn.execute(
+                """
+                select source_title, line_no, text, phrase, syllable_count,
+                       quote_score, terminal_anchor, reason
+                from quote_entries
+                order by quote_score desc, source_title, line_no
+                limit ?
+                """,
+                (limit,),
+            ).fetchall()
+        ]
+        counts = {
+            "text_lines": _count_rows(db_path, "text_entries"),
+            "rhyme_units": _count_rows(db_path, "rhyme_units"),
+            "rhyme_pairs": _count_rows(db_path, "rhyme_pairs"),
+            "quotes": _count_rows(db_path, "quote_entries"),
+        }
+    finally:
+        conn.close()
+
+    return {
+        "status": "ok",
+        "warning": "",
+        "counts": counts,
+        "text_lines": text_lines,
+        "rhyme_units": rhyme_units,
+        "rhyme_pairs": rhyme_pairs,
+        "quotes": quotes,
+    }
+
+
 def _training_example(kind: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "kind": kind,
