@@ -158,3 +158,52 @@ def test_global_similarity_alone_not_enough():
     s = score_rhyme("schattenkabinett", "aktienkapitals")
     assert s.total <= 0.40
     assert s.anchor_gated
+
+
+# ── Stress-Anchor-Migration: -en-Schwa-Falle ──────────────────────────────────
+
+def test_schwa_ending_anchors_on_stressed_vowel_not_suffix():
+    """
+    '-en' ist reduziertes Schwa und darf nicht Reim simulieren.
+    'machen' (a) reimt auf 'lachen' (a), NICHT gleichwertig auf 'leben' (ɛ).
+    Vor der Stress-Anchor-Migration waren beide ~1.0 (identisches [ə n]).
+    """
+    good = score_rhyme("machen", "lachen")
+    bad = score_rhyme("machen", "leben")
+    assert good.total >= 0.90, f"machen/lachen sollte top sein: {good.total:.3f}"
+    assert bad.total <= 0.82, f"machen/leben darf nicht top sein: {bad.total:.3f}"
+    assert good.total - bad.total >= 0.15
+
+
+def test_schwa_trap_same_stressed_vowel_still_rhymes():
+    """Gleicher Stressvokal trotz -en: 'machen' (a) ~ 'fahren' (a) bleibt stark
+    und schlaegt 'machen' ~ 'leben' (ɛ)."""
+    same_vowel = score_rhyme("machen", "fahren")
+    diff_vowel = score_rhyme("machen", "leben")
+    assert same_vowel.total > diff_vowel.total
+
+
+def test_schwa_trap_at_phrase_level():
+    """Phrasen-Ebene: 'einfach machen' reimt 'wir nur lachen' > 'das gute leben'."""
+    good = score_rhyme("einfach machen", "wir nur lachen")
+    bad = score_rhyme("einfach machen", "das gute leben")
+    assert good.total > bad.total
+    assert good.total >= 0.85
+
+
+# ── Stress-Anchor-Migration: Loanwords/Komposita bleiben endbetont ────────────
+
+def test_loanword_end_rhymes_not_regressed_by_stress_migration():
+    """Endbetonte Loanwords (-ett) duerfen durch die Migration NICHT schlechter
+    werden: hier faellt Stress-Anker mit Wortende zusammen."""
+    for cand in ["auf dem parkett", "komplett", "mit dem tablett"]:
+        s = score_rhyme("schattenkabinett", cand)
+        assert s.total >= 0.85, f"{cand!r} regressed: {s.total:.3f}"
+        assert s.anchor >= 0.90
+
+
+def test_compound_resolves_anchor_to_last_element():
+    """Kompositum-Stress: 'schattenkabinett' ankert auf '-ett' (letztes Glied
+    'kabinett'), nicht auf dem ersten 'a' von 'schatten'."""
+    s = score_rhyme("schattenkabinett", "komplett")
+    assert s.anchor >= 0.90 and not s.anchor_gated

@@ -58,7 +58,7 @@ async def search(request: SearchRequest):
 from pathlib import Path
 
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Optional
 
 class PhraseRankRequest(BaseModel):
     query: str
@@ -101,11 +101,19 @@ class UserTextSearchRequest(BaseModel):
     rerank: bool = False
     rerank_candidate_count: int = Field(120, ge=1, le=250)
     include_context_in_rerank: bool = False
+    include_dictionary: bool = False
+    dictionary_sources: Optional[List[str]] = None
 
 
 class UserLibrarySearchRequest(BaseModel):
     query: str
     limit: int = Field(30, ge=1, le=100)
+    min_score: float = Field(0.0, ge=0.0, le=1.0)
+
+
+class UserMeaningSearchRequest(BaseModel):
+    query: str
+    limit: int = Field(25, ge=1, le=100)
     min_score: float = Field(0.0, ge=0.0, le=1.0)
 
 
@@ -116,7 +124,7 @@ class UserLibraryListRequest(BaseModel):
 class UserRhymeFeedbackRequest(BaseModel):
     query: str
     source_title: str
-    line_no: int = Field(..., ge=1)
+    line_no: int = Field(..., ge=0)
     phrase: str
     rating: int = Field(..., ge=0, le=10)
     comment: str = Field("", max_length=2000)
@@ -244,6 +252,8 @@ async def search_user_texts(request: UserTextSearchRequest):
             rerank=request.rerank,
             rerank_candidate_count=request.rerank_candidate_count,
             include_context_in_rerank=request.include_context_in_rerank,
+            include_dictionary=request.include_dictionary,
+            dictionary_sources=request.dictionary_sources,
         )
     except Exception as e:
         raise HTTPException(400, str(e))
@@ -276,6 +286,34 @@ async def save_user_rhyme_feedback(request: UserRhymeFeedbackRequest):
             phrase=request.phrase,
             rating=request.rating,
             comment=request.comment,
+        )
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/user-texts/search-meaning")
+async def search_user_meaning(request: UserMeaningSearchRequest):
+    """BEDEUTUNGS-Achse: thematisch verwandte Zeilen (lokal, kein Reim).
+
+    Nutzt Satz-Embeddings (semantisch, findet auch Synonyme/Metaphern), wenn
+    `sentence-transformers` installiert ist — sonst Fallback auf TF-IDF.
+    """
+    try:
+        from app.services.semantic_embeddings import is_available, search_semantic
+
+        if is_available():
+            res = search_semantic(
+                query=request.query, limit=request.limit, min_score=request.min_score
+            )
+            if res.get("enabled"):
+                return res
+
+        from app.services.meaning_search import search_meaning
+
+        return search_meaning(
+            query=request.query,
+            limit=request.limit,
+            min_score=request.min_score,
         )
     except Exception as e:
         raise HTTPException(400, str(e))

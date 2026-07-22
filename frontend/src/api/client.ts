@@ -8,6 +8,7 @@ import type {
   SearchResponse,
   UserFullLibraryResponse,
   UserLocalModelTrainResponse,
+  UserMeaningSearchResponse,
   UserPipelineResponse,
   UserQuoteSearchResponse,
   UserRhymeFeedbackResponse,
@@ -73,6 +74,8 @@ export const api = {
     comment?: string;
   }) =>
     post<UserRhymeFeedbackResponse>("/api/rhymes/user-texts/feedback", req),
+  searchMeaning: (req: { query: string; limit?: number; min_score?: number }) =>
+    post<UserMeaningSearchResponse>("/api/rhymes/user-texts/search-meaning", req),
   searchUserTextLines: (req: { query: string; limit?: number }) =>
     post<UserTextLineSearchResponse>("/api/rhymes/user-texts/search-lines", req),
   searchUserQuotes: (req: { query: string; limit?: number; min_score?: number }) =>

@@ -890,6 +890,13 @@ def _personal_phrase_score(
     return round(min(final_score, 0.9999), 4)
 
 
+# ── Feedback-Lern-Parameter (lokal, privat) ─────────────────────────────────
+_FEEDBACK_ADJUSTMENT_CAP = 0.30        # Gesamt-Deckel des Feedback-Einflusses
+_PATTERN_MIN_OBSERVATIONS = 2          # ab so vielen Bewertungen greift ein Muster
+_PATTERN_FULL_CONFIDENCE = 5.0         # ab so vielen Bewertungen volle Muster-Stärke
+_PATTERN_MAX_ADJUSTMENT = 0.14         # max. Muster-Prior-Hub (< exaktes Feedback)
+
+
 def _feedback_query_norm(query: str) -> str:
     normalized = unicodedata.normalize("NFKC", query or "").casefold()
     return " ".join(WORD_RE.findall(normalized))
@@ -897,6 +904,54 @@ def _feedback_query_norm(query: str) -> str:
 
 def _feedback_candidate_key(source_title: str, line_no: int, phrase: str) -> str:
     return f"{source_title}\0{line_no}\0{phrase}"
+
+
+def _normalize_phrase_key(phrase: str) -> str:
+    """Orthographie-/Whitespace-tolerante Identität einer Phrase."""
+    normalized = unicodedata.normalize("NFKC", phrase or "").casefold()
+    words = WORD_RE.findall(normalized)
+    return " ".join(words) if words else normalized.strip()
+
+
+def _syllable_band(syllable_count: int) -> str:
+    """Grobes Flow-Längenband für die Feedback-Generalisierung."""
+    if syllable_count <= 4:
+        return "short"   # 3-4 Silben
+    if syllable_count <= 6:
+        return "mid"     # 4-6 Silben Kernband
+    if syllable_count <= 8:
+        return "long"    # 7-8 Silben
+    return "xl"
+
+
+def _terminal_family(phrase: str) -> str:
+    """Vokalfamilie des hörbaren Endankers einer Phrase (z.B. 'ɛ', 'a')."""
+    try:
+        features = PhraseFeatures.from_phrase(phrase)
+    except Exception:
+        return ""
+    last_vowel = _last_vowel(features.anchor)
+    return _vowel_family(last_vowel) if last_vowel else ""
+
+
+def _feedback_pattern_key(query: str, phrase: str) -> Optional[str]:
+    """
+    Muster-Schlüssel für die Feedback-Generalisierung.
+
+    Bündelt Bewertungen nach hörbarem Reim-/Flow-Muster statt nach exaktem
+    Kandidaten: (Query-Endfamilie | Kandidat-Endfamilie | Silbenband).
+    So heben 8-10-Bewertungen ähnliche Endreim-/Flow-Treffer an und
+    0-3-Bewertungen senken ähnliche Falschtreffer ab.
+    """
+    cand_family = _terminal_family(phrase)
+    if not cand_family:
+        return None
+    query_family = _terminal_family(query)
+    try:
+        syllables = PhraseFeatures.from_phrase(phrase).syllable_count
+    except Exception:
+        return None
+    return f"{query_family}|{cand_family}|{_syllable_band(syllables)}"
 
 
 def save_rhyme_feedback(
@@ -969,7 +1024,7 @@ def save_rhyme_feedback(
 def _load_feedback_maps(
     conn: sqlite3.Connection,
     query: str,
-) -> tuple[Dict[str, sqlite3.Row], Dict[str, Dict[str, Any]]]:
+) -> tuple[Dict[str, sqlite3.Row], Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
     _ensure_feedback_schema(conn)
     exact_rows = conn.execute(
         """
@@ -1000,7 +1055,26 @@ def _load_feedback_maps(
         }
         for row in aggregate_rows
     }
-    return exact, aggregate
+
+    # Muster-Priors: aggregiert über ALLE Bewertungen nach Reim-/Flow-Muster,
+    # damit Feedback auf ähnliche Treffer generalisiert (nicht nur exakter Kandidat).
+    pattern_rows = conn.execute(
+        "select query, phrase, rating from rhyme_feedback"
+    ).fetchall()
+    pattern_accum: Dict[str, List[int]] = {}
+    for row in pattern_rows:
+        key = _feedback_pattern_key(row["query"], row["phrase"])
+        if not key:
+            continue
+        pattern_accum.setdefault(key, []).append(int(row["rating"]))
+    patterns = {
+        key: {
+            "pattern_count": len(ratings),
+            "pattern_average": sum(ratings) / len(ratings),
+        }
+        for key, ratings in pattern_accum.items()
+    }
+    return exact, aggregate, patterns
 
 
 def _apply_feedback_to_results(
@@ -1014,7 +1088,7 @@ def _apply_feedback_to_results(
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
-        exact, aggregate = _load_feedback_maps(conn, query)
+        exact, aggregate, patterns = _load_feedback_maps(conn, query)
     finally:
         conn.close()
 
@@ -1037,14 +1111,30 @@ def _apply_feedback_to_results(
         feedback_average = feedback_aggregate.get("feedback_average")
         feedback_count = int(feedback_aggregate.get("feedback_count") or 0)
 
+        # Muster-Prior: generalisiertes Langzeit-Lernen über ähnliche Endreim-/Flow-Muster.
+        pattern_key = _feedback_pattern_key(query, str(result.get("phrase", "")))
+        pattern = patterns.get(pattern_key) if pattern_key else None
+        pattern_average = pattern["pattern_average"] if pattern else None
+        pattern_count = int(pattern["pattern_count"]) if pattern else 0
+
         adjustment = 0.0
         if feedback_row:
+            # Exaktes Feedback für genau diese Query dominiert (stärkstes Signal).
             has_feedback_for_results = True
             rating = int(feedback_row["rating"])
             adjustment = ((rating - 5) / 5) * 0.22
-        elif feedback_average is not None:
-            has_feedback_for_results = True
-            adjustment = ((float(feedback_average) - 5) / 5) * 0.10
+        else:
+            # Gleicher Kandidat, aber aus anderen Queries bewertet → schwaches Signal.
+            if feedback_average is not None:
+                has_feedback_for_results = True
+                adjustment += ((float(feedback_average) - 5) / 5) * 0.10
+            # Muster-Prior: ähnliche (nicht identische) Treffer mitziehen/-senken.
+            if pattern and pattern_count >= _PATTERN_MIN_OBSERVATIONS:
+                has_feedback_for_results = True
+                confidence = min(1.0, pattern_count / _PATTERN_FULL_CONFIDENCE)
+                adjustment += ((float(pattern_average) - 5) / 5) * _PATTERN_MAX_ADJUSTMENT * confidence
+
+        adjustment = max(-_FEEDBACK_ADJUSTMENT_CAP, min(_FEEDBACK_ADJUSTMENT_CAP, adjustment))
 
         item = dict(result)
         item["feedback_rating"] = int(feedback_row["rating"]) if feedback_row else None
@@ -1052,6 +1142,9 @@ def _apply_feedback_to_results(
         item["feedback_updated_at"] = feedback_row["updated_at"] if feedback_row else None
         item["feedback_count"] = feedback_count
         item["feedback_average"] = round(float(feedback_average), 3) if feedback_average is not None else None
+        item["feedback_pattern"] = pattern_key
+        item["feedback_pattern_count"] = pattern_count
+        item["feedback_pattern_average"] = round(float(pattern_average), 3) if pattern_average is not None else None
         item["feedback_score"] = round(max(0.0, min(0.9999, base_score + adjustment)), 4)
         enriched.append(item)
 
@@ -1071,6 +1164,30 @@ def _apply_feedback_to_results(
     return enriched
 
 
+def _dedupe_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Kollabiert identische Phrasen (Refrains/Hooks tauchen vielfach auf) auf
+    einen Repräsentanten, damit Wiederholungen das Ranking nicht fluten.
+    Erwartet nach Score absteigend vorsortierte Ergebnisse → erster Treffer
+    je Phrase ist der stärkste und bleibt deterministisch der Repräsentant.
+    """
+    best: Dict[str, Dict[str, Any]] = {}
+    order: List[str] = []
+    for result in results:
+        key = _normalize_phrase_key(str(result.get("phrase", "")))
+        if not key:
+            key = str(result.get("phrase", ""))
+        existing = best.get(key)
+        if existing is None:
+            item = dict(result)
+            item["occurrence_count"] = 1
+            best[key] = item
+            order.append(key)
+        else:
+            existing["occurrence_count"] = int(existing.get("occurrence_count", 1)) + 1
+    return [best[key] for key in order]
+
+
 def search_user_rhymes(
     query: str,
     db_path: Path = DB_PATH,
@@ -1079,6 +1196,8 @@ def search_user_rhymes(
     rerank: bool = False,
     rerank_candidate_count: int = 120,
     include_context_in_rerank: bool = False,
+    include_dictionary: bool = False,
+    dictionary_sources: List[str] | None = None,
 ) -> Dict[str, Any]:
     if not db_path.exists():
         return {"query": query, "results": [], "warning": "Reimdatenbank fehlt. Erst importieren."}
@@ -1131,10 +1250,28 @@ def search_user_rhymes(
             }
         )
 
+    # Zusaetzliches Wortmaterial aus lokalen Reim-Woerterbuechern (optional),
+    # damit nicht nur aus den eigenen Texten geschoepft wird.
+    if include_dictionary:
+        try:
+            from app.services.dictionary_loader import score_dictionary_rhymes
+
+            results.extend(
+                score_dictionary_rhymes(
+                    query, db_path=db_path, min_score=min_score, sources=dictionary_sources
+                )
+            )
+        except Exception:
+            pass
+
     results.sort(
         key=lambda item: (item["score"], item["raw_score"], item["anchor"], item["tail"]),
         reverse=True,
     )
+
+    # Dubletten (wiederholte Refrain-/Hook-Zeilen) zusammenfassen, bevor sie das
+    # Ranking und den Rerank-Pool verwässern.
+    results = _dedupe_results(results)
 
     rerank_info: Dict[str, Any] = {"enabled": False, "provider": "none"}
     if rerank:

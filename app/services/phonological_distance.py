@@ -65,6 +65,11 @@ def _vowel_sim(a: PF, b: PF) -> float:
     return h*0.4 + p*0.3 + r*0.2 + lo*0.1
 
 def _cons_sim(a: PF, b: PF) -> float:
+    # Nasale reimen perzeptuell stark ueber Artikulationsorte hinweg
+    # (Holtman: minimale Distanz; im Rap reimen -amm/-ann, -ing/-inn).
+    # Gleicher Manner (nasal) -> hoher Ort-Boden statt allgemeinem 0.3.
+    if a.typ == "nasal" and b.typ == "nasal":
+        return 1.0 if a.place == b.place else 0.78
     if a.place==b.place: ps=1.0
     elif a.place in _CORONAL and b.place in _CORONAL: ps=0.8
     elif a.place in _DORSAL  and b.place in _DORSAL:  ps=0.7

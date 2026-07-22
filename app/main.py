@@ -106,6 +106,24 @@ app.add_middleware(
 app.include_router(rhymes_router.router)
 
 
+# ── Reim-Trainer (lokales, privates Trainingsfeld) ───────────────────────────
+# Wird VOR dem "/"-Static-Mount registriert, damit die Route Vorrang hat.
+# Liefert das interaktive Bewertungs-Tool aus dem gitignorten Datenordner.
+_TRAINER_HTML = Path(__file__).resolve().parent / "data" / "user_texts" / "reim_trainer.html"
+
+
+@app.get("/trainer")
+async def reim_trainer():
+    from fastapi.responses import FileResponse, JSONResponse
+
+    if _TRAINER_HTML.is_file():
+        return FileResponse(str(_TRAINER_HTML), media_type="text/html")
+    return JSONResponse(
+        {"error": "Trainer-HTML fehlt. Erst scripts/build_rating_sheet.py / Trainer-Datei erzeugen."},
+        status_code=404,
+    )
+
+
 # ── Frontend ausliefern ────────────────────────────────────────────────────
 # FastAPI serviert das gebaute Vite-Frontend (frontend/dist) als same-origin SPA.
 # Muss NACH include_router gemountet werden, damit /api/... und /docs Vorrang

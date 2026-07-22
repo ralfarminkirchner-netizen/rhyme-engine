@@ -224,6 +224,10 @@ export interface UserRhymeResult {
   feedback_comment?: string;
   feedback_average?: number | null;
   feedback_count?: number;
+  feedback_pattern?: string;
+  feedback_pattern_count?: number;
+  feedback_pattern_average?: number | null;
+  occurrence_count?: number;
   anchor: number;
   tail: number;
   vowel: number;
@@ -282,6 +286,22 @@ export interface UserTextLineSearchResponse {
   results: UserTextLineResult[];
   total_candidates: number;
   retrieved_candidates?: number;
+  warning?: string;
+}
+
+export interface UserMeaningResult {
+  text: string;
+  score: number;
+  source_title: string;
+  line_no: number;
+  matched_terms?: string[];
+}
+
+export interface UserMeaningSearchResponse {
+  query: string;
+  axis?: string;
+  results: UserMeaningResult[];
+  total_candidates: number;
   warning?: string;
 }
 

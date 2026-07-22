@@ -184,15 +184,28 @@ def syllabify(phones: List[str]) -> List[List[str]]:
 
 # ── Betonung ──────────────────────────────────────────────────────────────────
 
+# idx = Position der betonten Silbe von HINTEN (1 = letzte Silbe, 2 = vorletzte).
+# Loanword-Endungen sind im Deutschen ueberwiegend endbetont — fuer Deutschrap
+# (viel -ett/-ekt/-akt/- on) ist das der dominante Reim-Anker. Laengere/spezifische
+# Suffixe zuerst, damit z.B. "ieren" vor "ier" greift.
 STRESS_SUFFIX_RULES = [
-    ("ieren", 2), ("ität", 1), ("ion", 1), ("iv", 1), ("ik", 1), ("ur", 1),
+    ("ieren", 2), ("ität", 1), ("ismus", 2),
+    ("ion", 1), ("tät", 1),
+    ("ett", 1), ("ekt", 1), ("akt", 1), ("ekt", 1),
+    ("ent", 1), ("ant", 1), ("anz", 1), ("enz", 1),
+    ("ell", 1), ("eur", 1), ("ier", 1), ("ière", 1),
+    ("är", 1), ("ös", 1), ("iv", 1), ("on", 1), ("ee", 1),
+    ("ade", 1), ("age", 1), ("al", 1), ("ur", 1), ("ik", 1),
+    ("ie", 1),
 ]
 
-def detect_stress(word: str, syllable_count: int) -> List[int]:
-    w = word.strip().lower()
+
+def _simple_stress(w: str, syllable_count: int) -> List[int]:
+    """Einzelwort-Betonung (ohne Kompositum-Zerlegung)."""
     if w in EXCEPTIONS and "stress" in EXCEPTIONS[w]:
         pat = list(EXCEPTIONS[w]["stress"])
-        while len(pat) < syllable_count: pat.append(0)
+        while len(pat) < syllable_count:
+            pat.append(0)
         return pat[:syllable_count]
 
     arr = [0] * max(1, syllable_count)
@@ -202,7 +215,7 @@ def detect_stress(word: str, syllable_count: int) -> List[int]:
 
     for suffix, idx in STRESS_SUFFIX_RULES:
         if w.endswith(suffix):
-            arr[min(syllable_count-idx, syllable_count-1)] = 1
+            arr[min(syllable_count - idx, syllable_count - 1)] = 1
             return arr
 
     if any(w.startswith(p) for p in UNSTRESSED_PREFIXES) and syllable_count > 1:
@@ -211,6 +224,53 @@ def detect_stress(word: str, syllable_count: int) -> List[int]:
 
     arr[0] = 1
     return arr
+
+
+def _syllables_of(part: str) -> int:
+    try:
+        return max(1, len(syllabify(graphemes_to_phonemes(part))))
+    except Exception:
+        return 1
+
+
+def detect_stress(word: str, syllable_count: int) -> List[int]:
+    """
+    Betonungsmuster (0/1 je Silbe).
+
+    Kompositum-bewusst: bei deutschen Determinativkomposita liegt der fuer den
+    REIM relevante Akzent auf dem letzten Glied (Grundwort) — "Schatten·kabinétt",
+    "Haltbarkeits·Dátum". Wir zerlegen, betonen das letzte Glied per Einzelwort-
+    Regel und mappen die Position global. Stimmt die Silbenarithmetik nicht
+    (Randeffekte der Silbung), faellt es sicher auf die Einzelwort-Logik zurueck.
+    """
+    w = word.strip().lower()
+    if syllable_count <= 1:
+        return [1]
+    if w in EXCEPTIONS and "stress" in EXCEPTIONS[w]:
+        return _simple_stress(w, syllable_count)
+
+    try:
+        from app.services.compound_splitter import split_compound
+
+        parts = split_compound(w)
+    except Exception:
+        parts = [w]
+
+    if len(parts) >= 2:
+        counts = [_syllables_of(p) for p in parts]
+        if sum(counts) == syllable_count:
+            last, last_count = parts[-1], counts[-1]
+            offset = sum(counts[:-1])
+            sub = _simple_stress(last, last_count)
+            arr = [0] * syllable_count
+            for i, v in enumerate(sub):
+                if v and offset + i < syllable_count:
+                    arr[offset + i] = 1
+            if not any(arr):
+                arr[min(offset, syllable_count - 1)] = 1
+            return arr
+
+    return _simple_stress(w, syllable_count)
 
 # ── Reim-Features ─────────────────────────────────────────────────────────────
 

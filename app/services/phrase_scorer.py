@@ -123,8 +123,20 @@ class PhraseFeatures:
         last_word = words[-1] if words else phrase
         parsed = parse_german_word(last_word)
 
-        # Anker = terminal_span (letzter Vokal + Ausklang)
-        anchor = parsed.terminal_span
+        # Anker-Wahl je nach Wortende:
+        #  - SCHWA-finale Woerter (-en/-er/-e): reduziertes Wortende traegt keinen
+        #    Reim. "machen" reimt sonst auf "leben" (beide [...ə n]). Hier ankern
+        #    wir am LETZTEN HAUPTAKZENT (rhyme_span) -> Reim am betonten Vokal.
+        #  - Volle End-Vokale (-ett/-aft/-ung): bewaehrte End-Verankerung
+        #    (terminal_span), damit z.B. meisterschaft/scheidensaft erhalten bleibt.
+        SCHWA = {"ə", "ɐ"}
+        term_span = parsed.terminal_span
+        if term_span and term_span[0] in SCHWA and parsed.rhyme_span:
+            anchor = parsed.rhyme_span
+            end_tail = parsed.tail
+        else:
+            anchor = term_span
+            end_tail = parsed.terminal_tail
 
         # Lokale Vokalfolge = nur Vokale im Anker
         from app.services.phonological_distance import FEATURES as PH_FEAT
@@ -148,7 +160,7 @@ class PhraseFeatures:
             last_word=last_word,
             parsed_last=parsed,
             anchor=anchor,
-            end_tail=parsed.terminal_tail,
+            end_tail=end_tail,
             anchor_vowels=anchor_vowels,
             phrase_vowels=phrase_vowels,
             syllable_count=syllable_count,

@@ -1,535 +1,429 @@
-import { useState, useCallback, useEffect } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import { api } from "../api/client";
 import type {
-  HighlightSegment,
-  Mode,
-  PhoneticFeatures,
-  PhraseRankResponse,
-  PhraseRankResult,
-  RankedCandidate,
-  RhymeHighlightResponse,
-  RawWeights,
-  SearchResponse,
-  UserFullLibraryResponse,
-  UserLocalModelTrainResponse,
-  UserPipelineResponse,
-  UserQuoteResult,
-  UserQuoteSearchResponse,
+  UserMeaningResult,
+  UserMeaningSearchResponse,
   UserRhymeResult,
   UserRhymeSearchResponse,
-  UserTrainingBuildResponse,
-  UserTextLineResult,
-  UserTextLineSearchResponse,
   UserTextSummary,
 } from "../types";
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+type Axis = "rhymes" | "meaning";
 
-const MODE_LABELS: Record<Mode, string> = {
-  strict:        "🎯 Strikt",
-  balanced:      "⚖️  Balanced",
-  dirty:         "〰️ Dirty",
-  multisyllabic: "🔗 Multi",
-  hardcore:      "💎 Hardcore",
-  endRhyme:      "🏁 Endreim",
-};
+const BACKEND_URL = "http://localhost:8003";
+const RATING_VALUES = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
-function stressBar(pat: number[]): string {
-  return pat.map((s) => (s === 1 ? "█" : "░")).join("");
+function asNumber(value: unknown, fallback = 0): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
 }
 
-function scoreColor(s: number): string {
-  if (s >= 0.85) return "#5fca5f";
-  if (s >= 0.70) return "#f0c040";
-  return "#ca6f5f";
+function score(value: unknown): string {
+  return asNumber(value).toFixed(3);
 }
 
-// ── Query-Info-Box ────────────────────────────────────────────────────────────
+function compactScore(value: unknown): string {
+  return asNumber(value).toFixed(2);
+}
 
-function QueryInfo({
-  feat,
-  target,
-}: {
-  feat: PhoneticFeatures;
-  target: "rhyme" | "terminal";
-}) {
-  // KERNUNTERSCHIED: Bei endRhyme zeigen wir terminal*, sonst rhyme*
-  const isTerminal = target === "terminal";
+function clampLimit(value: number): number {
+  return Math.min(100, Math.max(1, Math.round(value || 25)));
+}
 
-  const activeVowels = isTerminal ? feat.terminalVowelSpine : feat.vowelSpine;
-  const activeTail   = isTerminal ? feat.terminalTail       : feat.tail;
-  const activeSpan   = isTerminal ? feat.terminalSpan       : feat.rhymeSpan;
+function clampMinScore(value: number): number {
+  return Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0));
+}
 
+function backendError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  return `Backend nicht erreichbar auf ${BACKEND_URL} — läuft uvicorn auf 8003? ${raw}`;
+}
+
+function resultKey(row: Pick<UserRhymeResult, "source_title" | "line_no" | "phrase">): string {
+  return `${row.source_title}:${row.line_no}:${row.phrase}`;
+}
+
+function ratingTone(value: number): "low" | "mid" | "high" {
+  if (value <= 3) return "low";
+  if (value <= 7) return "mid";
+  return "high";
+}
+
+function matchedTerms(row: UserMeaningResult): string[] {
+  return Array.isArray(row.matched_terms)
+    ? row.matched_terms.map(String).filter(Boolean)
+    : [];
+}
+
+function HeaderStats({ summary }: { summary: UserTextSummary | null }) {
   return (
-    <div style={s.infoBox}>
-      <span style={s.label}>Phonetik:</span>
-      <span style={s.val}>[{feat.phonetic.join(" ")}]</span>
-      <span style={s.label}>Silben:</span>
-      <span style={s.val}>{feat.syllableCount}</span>
-      <span style={s.label}>Stress:</span>
-      <span style={s.val}>{stressBar(feat.stressPattern)}</span>
-      <br />
-      {isTerminal ? (
-        <>
-          <span style={s.dimLabel}>terminalSpan:</span>
-          <span style={s.val}>[{activeSpan.join(",")}]</span>
-          <span style={s.dimLabel}>terminalVowelSpine:</span>
-          <span style={s.val}>[{activeVowels.join(",")}]</span>
-          <span style={s.dimLabel}>terminalTail:</span>
-          <span style={s.val}>[{activeTail.join(",")}]</span>
-        </>
-      ) : (
-        <>
-          <span style={s.dimLabel}>rhymeSpan:</span>
-          <span style={s.val}>[{activeSpan.join(",")}]</span>
-          <span style={s.dimLabel}>vowelSpine:</span>
-          <span style={s.val}>[{activeVowels.join(",")}]</span>
-          <span style={s.dimLabel}>tail:</span>
-          <span style={s.val}>[{activeTail.join(",")}]</span>
-        </>
-      )}
+    <div className="rw-header-stats">
+      <span className="rw-stat-chip"><strong>{summary?.imported_count ?? 0}</strong> Quellen</span>
+      <span className="rw-stat-chip"><strong>{summary?.line_count ?? 0}</strong> Zeilen</span>
+      <span className="rw-stat-chip"><strong>{summary?.rhyme_unit_count ?? 0}</strong> Units</span>
+      <span className="rw-stat-chip"><strong>{summary?.quote_count ?? 0}</strong> Quotes</span>
     </div>
   );
 }
 
-// ── Ergebnis-Zeile ────────────────────────────────────────────────────────────
-
-function CandidateRow({
-  c,
-  i,
-  isTerminal,
+function AxisButton({
+  active,
+  children,
+  onClick,
 }: {
-  c: RankedCandidate;
-  i: number;
-  isTerminal: boolean;
+  active: boolean;
+  children: ReactNode;
+  onClick: () => void;
 }) {
-  const vowels = isTerminal ? c.terminalVowelSpine : c.vowelSpine;
-  const tail   = isTerminal ? c.terminalTail       : c.tail;
-
   return (
-    <tr style={{ background: i % 2 === 0 ? "#0f0f0f" : "#121212" }}>
-      <td style={s.td}>{i + 1}</td>
-      <td style={{ ...s.td, fontWeight: 700, color: "#fff" }}>{c.text}</td>
-      <td style={s.td}>{c.syllableCount}</td>
-      <td style={{ ...s.td, fontFamily: "monospace", color: "#888" }}>
-        {stressBar(c.stressPattern)}
-      </td>
-      <td style={s.td}>
-        {vowels.length > 0 ? vowels.join(" · ") : "–"}
-      </td>
-      <td style={s.td}>
-        {tail.length > 0 ? tail.join("") : "–"}
-      </td>
-      <td style={s.td}>
-        <span style={{ color: scoreColor(c.score), fontWeight: 700 }}>
-          {c.score.toFixed(3)}
-        </span>
-      </td>
-      <td style={{ ...s.td, fontSize: "0.75rem", color: "#555" }}>
-        v{c.breakdown.vowelCore.toFixed(2)}
-        {" "}t{c.breakdown.tail.toFixed(2)}
-        {" "}s{c.breakdown.stress.toFixed(2)}
-      </td>
-    </tr>
+    <button
+      type="button"
+      className={`rw-axis-button ${active ? "is-active" : ""}`}
+      onClick={onClick}
+      aria-pressed={active}
+    >
+      {children}
+    </button>
   );
 }
 
-function PhraseRow({ r, i }: { r: PhraseRankResult; i: number }) {
-  return (
-    <tr style={{ background: i % 2 === 0 ? "#0f0f0f" : "#121212" }}>
-      <td style={s.td}>{i + 1}</td>
-      <td style={{ ...s.td, fontWeight: 700, color: "#fff" }}>{r.phrase}</td>
-      <td style={s.td}>
-        <span style={{ color: scoreColor(r.score), fontWeight: 700 }}>
-          {r.score.toFixed(3)}
-        </span>
-      </td>
-      <td style={s.td}>a{r.anchor.toFixed(2)}</td>
-      <td style={s.td}>t{r.tail.toFixed(2)}</td>
-      <td style={s.td}>v{r.vowel.toFixed(2)}</td>
-      <td style={s.td}>c{r.cadence.toFixed(2)}</td>
-      <td style={{ ...s.td, color: r.anchor_gated ? "#ca6f5f" : "#5fca5f" }}>
-        {r.anchor_gated ? "Gate" : "OK"}
-      </td>
-      <td style={{ ...s.td, color: "#777", fontSize: "0.75rem" }}>{r.reason}</td>
-    </tr>
-  );
+function Badge({
+  children,
+  tone,
+}: {
+  children: ReactNode;
+  tone?: "good" | "warn" | "muted" | "violet";
+}) {
+  return <span className={`rw-badge ${tone ? `rw-badge-${tone}` : ""}`}>{children}</span>;
 }
 
-const RATING_VALUES = [0,1,2,3,4,5,6,7,8,9,10];
-
-function UserRhymeRow({
-  r,
-  i,
+function RhymeCard({
+  row,
+  query,
+  pending,
+  saved,
+  error,
+  draftComment,
+  onCommentChange,
   onFeedback,
 }: {
-  r: UserRhymeResult;
-  i: number;
-  onFeedback: (r: UserRhymeResult, rating: number, comment: string) => void;
+  row: UserRhymeResult;
+  query: string;
+  pending: boolean;
+  saved: boolean;
+  error?: string;
+  draftComment: string;
+  onCommentChange: (comment: string) => void;
+  onFeedback: (row: UserRhymeResult, rating: number, comment: string) => void;
 }) {
-  const [commentOpen, setCommentOpen] = useState(Boolean(r.feedback_comment));
-  const [draftComment, setDraftComment] = useState(r.feedback_comment ?? "");
-  const displayScore = r.feedback_score ?? r.learned_score ?? r.llm_score ?? r.score;
-  const currentRating = r.feedback_rating ?? null;
-
-  useEffect(() => {
-    setDraftComment(r.feedback_comment ?? "");
-    setCommentOpen(Boolean(r.feedback_comment));
-  }, [r.feedback_comment, r.line_no, r.phrase, r.source_title]);
+  const currentRating = row.feedback_rating ?? null;
+  const displayFeedbackScore = row.feedback_score ?? row.score;
+  const occurrenceCount = asNumber(row.occurrence_count, 1);
+  const hasPattern = asNumber(row.feedback_pattern_count) > 0;
 
   return (
-    <>
-      <tr style={{ background: i % 2 === 0 ? "#0f0f0f" : "#121212" }}>
-        <td style={s.td}>{i + 1}</td>
-        <td style={{ ...s.td, fontWeight: 700, color: "#fff" }}>{r.phrase}</td>
-        <td style={s.td}>
-          <span style={{ color: scoreColor(displayScore), fontWeight: 700 }}>
-            {displayScore.toFixed(3)}
-          </span>
-        </td>
-        <td style={s.td}>{r.syllable_count}</td>
-        <td style={s.td}>
-          <div style={s.ratingScale}>
-            {RATING_VALUES.map((rating) => (
+    <article className={`rw-result-card rw-rhyme-card ${currentRating != null || saved ? "is-rated" : ""}`}>
+      <div className="rw-card-topline">
+        <div>
+          <h2 className="rw-result-title">{row.phrase || "Unbenannter Treffer"}</h2>
+          {row.line_text && <p className="rw-line-context">{row.line_text}</p>}
+        </div>
+        <div className="rw-card-rank" title={`Feedback-Score für "${query}"`}>
+          {score(displayFeedbackScore)}
+        </div>
+      </div>
+
+      <div className="rw-badge-row">
+        <Badge>Engine {score(row.score)}</Badge>
+        <Badge tone="good">nach Feedback {score(displayFeedbackScore)}</Badge>
+        <Badge>Anker {compactScore(row.anchor)}</Badge>
+        <Badge>Tail {compactScore(row.tail)}</Badge>
+        <Badge>Vokal {compactScore(row.vowel)}</Badge>
+        <Badge>Kadenz {compactScore(row.cadence)}</Badge>
+        <Badge>{asNumber(row.syllable_count)} Silben</Badge>
+        <Badge tone="muted">
+          {row.source_title || "Quelle unbekannt"}
+          {occurrenceCount > 1 ? ` · ${occurrenceCount}x` : ""}
+          {row.line_no ? ` · Zeile ${row.line_no}` : ""}
+        </Badge>
+        {hasPattern && (
+          <Badge tone="warn">
+            Muster {asNumber(row.feedback_pattern_count)}x
+            {row.feedback_pattern_average != null ? ` (Ø ${compactScore(row.feedback_pattern_average)})` : ""}
+          </Badge>
+        )}
+        {currentRating != null && <Badge tone="good">deine Note {currentRating}</Badge>}
+      </div>
+
+      {row.reason && <p className="rw-reason">{row.reason}</p>}
+
+      <div className="rw-rating-block">
+        <div className="rw-rating-copy">
+          <strong>Note 0-10</strong>
+          <span>0-3 schlecht/kein Reim · 4-7 ok · 8-10 stark</span>
+        </div>
+        <div className="rw-rating-scale" aria-label={`Bewertung für ${row.phrase}`}>
+          {RATING_VALUES.map((rating) => {
+            const selected = currentRating === rating;
+            return (
               <button
                 key={rating}
                 type="button"
-                title={`Bewertung ${rating}/10`}
-                style={{
-                  ...s.ratingBtn,
-                  ...(currentRating === rating ? s.ratingBtnActive : {}),
-                }}
-                onClick={() => onFeedback(r, rating, draftComment)}
+                className={[
+                  "rw-rating-button",
+                  `rw-rating-${ratingTone(rating)}`,
+                  selected ? "is-selected" : "",
+                ].filter(Boolean).join(" ")}
+                disabled={pending}
+                onClick={() => onFeedback(row, rating, draftComment)}
+                title={`${rating}/10 speichern`}
               >
                 {rating}
               </button>
-            ))}
-          </div>
-          <div style={s.feedbackMeta}>
-            <button
-              type="button"
-              style={s.commentToggle}
-              onClick={() => setCommentOpen((open) => !open)}
-            >
-              {commentOpen ? "Kommentar zu" : "Kommentar"}
-            </button>
-            {r.feedback_average != null && (
-              <span>{r.feedback_average.toFixed(1)} aus {r.feedback_count}</span>
-            )}
-          </div>
-        </td>
-        <td style={s.td}>{r.source_title}</td>
-        <td style={s.td}>{r.line_no}</td>
-        <td style={{ ...s.td, color: "#777", fontSize: "0.75rem" }}>{r.line_text}</td>
-      </tr>
-      {commentOpen && (
-        <tr style={{ background: i % 2 === 0 ? "#0f0f0f" : "#121212" }}>
-          <td style={s.td} />
-          <td style={s.td} colSpan={7}>
-            <textarea
-              style={s.feedbackTextarea}
-              value={draftComment}
-              onChange={(e) => setDraftComment(e.target.value)}
-              placeholder="Kommentar zu diesem Reim"
-            />
-            <button
-              type="button"
-              style={s.searchBtn}
-              onClick={() => onFeedback(r, currentRating ?? 5, draftComment)}
-            >
-              Kommentar speichern
-            </button>
-          </td>
-        </tr>
-      )}
-    </>
-  );
-}
-
-function UserTextLineRow({ r, i }: { r: UserTextLineResult; i: number }) {
-  return (
-    <tr style={{ background: i % 2 === 0 ? "#0f0f0f" : "#121212" }}>
-      <td style={s.td}>{i + 1}</td>
-      <td style={{ ...s.td, color: "#ddd" }}>{r.text}</td>
-      <td style={s.td}>
-        <span style={{ color: scoreColor(r.score), fontWeight: 700 }}>
-          {r.score.toFixed(3)}
-        </span>
-      </td>
-      <td style={s.td}>{r.matched_terms}</td>
-      <td style={s.td}>{r.source_title}</td>
-      <td style={s.td}>{r.line_no}</td>
-    </tr>
-  );
-}
-
-function UserQuoteRow({ r, i }: { r: UserQuoteResult; i: number }) {
-  return (
-    <tr style={{ background: i % 2 === 0 ? "#0f0f0f" : "#121212" }}>
-      <td style={s.td}>{i + 1}</td>
-      <td style={{ ...s.td, color: "#fff", fontWeight: 700 }}>{r.text}</td>
-      <td style={s.td}>
-        <span style={{ color: scoreColor(r.score), fontWeight: 700 }}>
-          {r.score.toFixed(3)}
-        </span>
-      </td>
-      <td style={s.td}>q{r.quote_score.toFixed(2)}</td>
-      <td style={s.td}>r{r.rhyme_score.toFixed(2)}</td>
-      <td style={s.td}>{r.phrase}</td>
-      <td style={s.td}>{r.source_title}:{r.line_no}</td>
-      <td style={{ ...s.td, color: "#777", fontSize: "0.75rem" }}>{r.reason}</td>
-    </tr>
-  );
-}
-
-function alpha(hex: string, value: string): string {
-  return `${hex}${value}`;
-}
-
-function HighlightedSegment({ segment }: { segment: HighlightSegment }) {
-  if (segment.kind !== "syllable") {
-    return <span>{segment.text}</span>;
-  }
-
-  const hasColor = Boolean(segment.color);
-  return (
-    <span
-      title={[
-        segment.word ? `Wort: ${segment.word}` : null,
-        segment.phonetic?.length ? `Phonetik: ${segment.phonetic.join(" ")}` : null,
-        segment.rhyme_group ? `Gruppe: ${segment.rhyme_group}` : null,
-        segment.accented ? "betont" : null,
-        segment.terminal ? "terminal" : null,
-      ].filter(Boolean).join(" · ")}
-      style={{
-        ...s.syllable,
-        background: hasColor ? alpha(segment.color!, "33") : "transparent",
-        color: hasColor ? "#fff" : segment.accented ? "#d7d7d7" : "#777",
-        borderBottomColor: hasColor ? segment.color! : segment.accented ? "#555" : "transparent",
-        boxShadow: hasColor ? `inset 0 -2px 0 ${segment.color}` : "none",
-      }}
-    >
-      {segment.text}
-    </span>
-  );
-}
-
-function RhymeHeatmap({ analysis }: { analysis: RhymeHighlightResponse }) {
-  return (
-    <div>
-      <div style={s.meta}>
-        {analysis.colored_syllable_count} farbige Silben ·{" "}
-        {analysis.accented_syllable_count} betonte Silben ·{" "}
-        {analysis.rhyme_groups.length} Reimgruppen
+            );
+          })}
+        </div>
       </div>
-      <div style={s.legend}>
-        {analysis.rhyme_groups.slice(0, 18).map((group) => (
-          <span key={group.key} style={s.legendItem}>
-            <span style={{ ...s.legendSwatch, background: group.color }} />
-            {group.key} ({group.count})
+
+      <div className="rw-comment-row">
+        <textarea
+          className="rw-comment-field"
+          value={draftComment}
+          maxLength={2000}
+          rows={2}
+          onChange={(event) => onCommentChange(event.target.value)}
+          placeholder="Kommentar optional, bleibt lokal im Feedback-Speicher"
+        />
+        <button
+          type="button"
+          className="rw-quiet-button"
+          disabled={pending || currentRating == null}
+          onClick={() => {
+            if (currentRating != null) onFeedback(row, currentRating, draftComment);
+          }}
+        >
+          Kommentar speichern
+        </button>
+      </div>
+
+      <div className="rw-card-foot">
+        <span>Feedback wirkt exakt auf diesen Treffer und ab 2 Muster-Noten auch auf ähnliche Endreim-/Flow-Muster.</span>
+        {pending && <strong>speichert...</strong>}
+        {saved && <strong className="rw-learned">gelernt ✓</strong>}
+        {error && <strong className="rw-card-error">{error}</strong>}
+      </div>
+    </article>
+  );
+}
+
+function MeaningCard({ row }: { row: UserMeaningResult }) {
+  const terms = matchedTerms(row);
+
+  return (
+    <article className="rw-result-card rw-meaning-card">
+      <div className="rw-card-topline">
+        <h2 className="rw-result-title">{row.text || "Leere Zeile"}</h2>
+        <div className="rw-card-rank rw-card-rank-violet">{score(row.score)}</div>
+      </div>
+      <div className="rw-badge-row">
+        <Badge tone="violet">Relevanz {score(row.score)}</Badge>
+        <Badge tone="muted">
+          {row.source_title || "Quelle unbekannt"}
+          {row.line_no ? ` · Zeile ${row.line_no}` : ""}
+        </Badge>
+        {terms.length > 0 && <Badge>Treffer: {terms.join(", ")}</Badge>}
+      </div>
+    </article>
+  );
+}
+
+function SummaryPanel({
+  summary,
+  loading,
+  error,
+  onRefresh,
+  onImport,
+}: {
+  summary: UserTextSummary | null;
+  loading: boolean;
+  error: string | null;
+  onRefresh: () => void;
+  onImport: () => void;
+}) {
+  return (
+    <section className="rw-side-panel">
+      <h2 className="rw-side-title">Bibliothek</h2>
+      <div className="rw-count-grid">
+        <div className="rw-count"><strong>{summary?.source_count ?? 0}</strong><span>Quellen gesamt</span></div>
+        <div className="rw-count"><strong>{summary?.line_count ?? 0}</strong><span>Zeilen</span></div>
+        <div className="rw-count"><strong>{summary?.rhyme_unit_count ?? 0}</strong><span>Reim-Units</span></div>
+        <div className="rw-count"><strong>{summary?.rhyme_pair_count ?? 0}</strong><span>Reimpaare</span></div>
+      </div>
+      <div className="rw-side-actions" style={{ marginTop: "0.75rem" }}>
+        <button className="rw-primary-button" type="button" onClick={onImport} disabled={loading}>
+          {loading ? "Lädt" : "Importieren"}
+        </button>
+        <button className="rw-quiet-button" type="button" onClick={onRefresh} disabled={loading}>
+          Status
+        </button>
+      </div>
+      {error && <div className="rw-inline-error">{error}</div>}
+      {summary?.warnings?.length ? (
+        <div className="rw-warning-list">
+          {summary.warnings.slice(0, 3).map((warning, index) => (
+            <span key={`${warning}-${index}`}>{warning}</span>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function SourcePanel({ summary }: { summary: UserTextSummary | null }) {
+  if (!summary?.documents?.length) return null;
+
+  return (
+    <section className="rw-side-panel">
+      <h2 className="rw-side-title">Quellen</h2>
+      <div className="rw-pill-list">
+        {summary.documents.slice(0, 18).map((doc) => (
+          <span key={doc.source_id} className="rw-pill">
+            {doc.title}: {doc.line_count}/{doc.rhyme_unit_count}
           </span>
         ))}
       </div>
-      <div style={s.heatmap}>
-        {analysis.lines.map((line) => (
-          <div
-            key={line.raw_index}
-            style={{
-              ...s.highlightLine,
-              opacity: line.is_lyric || line.raw.trim() === "" ? 1 : 0.55,
-              color: line.is_lyric ? "#ddd" : "#777",
-            }}
-          >
-            <span style={s.lineNo}>{line.lyric_index ?? ""}</span>
-            <span>
-              {line.segments.map((segment, i) => (
-                <HighlightedSegment key={`${line.raw_index}-${i}`} segment={segment} />
-              ))}
-            </span>
-          </div>
-        ))}
-      </div>
-    </div>
+    </section>
   );
 }
 
-// ── Haupt-Komponente ──────────────────────────────────────────────────────────
-
 export default function RhymeSearch() {
-  const [query, setQuery]           = useState("Schattentanz");
-  const [mode, setMode]             = useState<Mode>("balanced");
-  const [response, setResponse]     = useState<SearchResponse | null>(null);
-  const [loading, setLoading]       = useState(false);
-  const [error, setError]           = useState<string | null>(null);
-  const [weights, setWeights]       = useState<Partial<RawWeights>>({});
-  const [phraseQuery, setPhraseQuery] = useState("wach lieg im Bett");
-  const [phraseCandidates, setPhraseCandidates] = useState(
-    [
-      "Wackelndes Brett",
-      "Wachstum verlässt",
-      "Aktienregress",
-      "Plastikbesteck",
-      "Schattengewächs",
-      "straff wie ein Netz",
-      "schattungsgesetz",
-      "aktienkapitals",
-    ].join("\n")
-  );
-  const [phraseResponse, setPhraseResponse] = useState<PhraseRankResponse | null>(null);
-  const [phraseLoading, setPhraseLoading] = useState(false);
-  const [phraseError, setPhraseError] = useState<string | null>(null);
-  const [highlightText, setHighlightText] = useState("");
-  const [highlightResponse, setHighlightResponse] = useState<RhymeHighlightResponse | null>(null);
-  const [highlightLoading, setHighlightLoading] = useState(false);
-  const [highlightError, setHighlightError] = useState<string | null>(null);
-  const [contextRadius, setContextRadius] = useState(6);
-  const [userSummary, setUserSummary] = useState<UserTextSummary | null>(null);
-  const [userImporting, setUserImporting] = useState(false);
-  const [userTextError, setUserTextError] = useState<string | null>(null);
-  const [userRhymeQuery, setUserRhymeQuery] = useState("wach lieg im Bett");
-  const [userRhymeResponse, setUserRhymeResponse] = useState<UserRhymeSearchResponse | null>(null);
-  const [userRhymeLoading, setUserRhymeLoading] = useState(false);
-  const [textLibraryQuery, setTextLibraryQuery] = useState("Schatten");
-  const [textLibraryResponse, setTextLibraryResponse] = useState<UserTextLineSearchResponse | null>(null);
-  const [textLibraryLoading, setTextLibraryLoading] = useState(false);
-  const [quoteLibraryQuery, setQuoteLibraryQuery] = useState("schattenkabinett");
-  const [quoteLibraryResponse, setQuoteLibraryResponse] = useState<UserQuoteSearchResponse | null>(null);
-  const [quoteLibraryLoading, setQuoteLibraryLoading] = useState(false);
-  const [trainingBuild, setTrainingBuild] = useState<UserTrainingBuildResponse | null>(null);
-  const [trainingLoading, setTrainingLoading] = useState(false);
-  const [localModelTrain, setLocalModelTrain] = useState<UserLocalModelTrainResponse | null>(null);
-  const [localModelLoading, setLocalModelLoading] = useState(false);
-  const [useTrainedRerank, setUseTrainedRerank] = useState(false);
-  const [pipelineResponse, setPipelineResponse] = useState<UserPipelineResponse | null>(null);
-  const [pipelineLoading, setPipelineLoading] = useState(false);
-  const [fullLibrary, setFullLibrary] = useState<UserFullLibraryResponse | null>(null);
-  const [fullLibraryLoading, setFullLibraryLoading] = useState(false);
+  const [axis, setAxis] = useState<Axis>("rhymes");
+  const [query, setQuery] = useState("einfach machen");
+  const [limit, setLimit] = useState(25);
+  const [minScore, setMinScore] = useState(0.4);
+  const [rhymeResponse, setRhymeResponse] = useState<UserRhymeSearchResponse | null>(null);
+  const [meaningResponse, setMeaningResponse] = useState<UserMeaningSearchResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [summary, setSummary] = useState<UserTextSummary | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [comments, setComments] = useState<Record<string, string>>({});
+  const [pendingFeedback, setPendingFeedback] = useState<Record<string, boolean>>({});
+  const [savedFeedback, setSavedFeedback] = useState<Record<string, boolean>>({});
+  const [feedbackErrors, setFeedbackErrors] = useState<Record<string, string>>({});
 
-  const isTerminal = response?.target === "terminal";
+  const activeResponse = axis === "rhymes" ? rhymeResponse : meaningResponse;
+  const activeCount = activeResponse?.results?.length ?? 0;
+  const activeTotal = activeResponse?.total_candidates ?? 0;
 
-  const search = useCallback(async () => {
-    if (!query.trim()) return;
+  const modeHint = useMemo(() => {
+    if (axis === "rhymes") {
+      return "Modus: Reime - klanglich, mit Bewertung und Lernen.";
+    }
+    return "Modus: Bedeutung - thematisch verwandte Zeilen, getrennt vom Reim-Ranking und read-only.";
+  }, [axis]);
+
+  const loadSummary = useCallback(async () => {
+    setSummaryLoading(true);
+    setSummaryError(null);
+    try {
+      setSummary(await api.userTextSummary());
+    } catch (caught) {
+      setSummaryError(backendError(caught));
+    } finally {
+      setSummaryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadSummary();
+  }, [loadSummary]);
+
+  const importUserTexts = useCallback(async () => {
+    setSummaryLoading(true);
+    setSummaryError(null);
+    try {
+      setSummary(await api.importUserTexts({ prefer_pages_export: true, context_radius: 12 }));
+    } catch (caught) {
+      setSummaryError(backendError(caught));
+    } finally {
+      setSummaryLoading(false);
+    }
+  }, []);
+
+  const searchRhymes = useCallback(async () => {
+    const trimmed = query.trim();
+    if (!trimmed) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await api.search({
-        query,
-        mode,
-        weights: Object.keys(weights).length ? weights : undefined,
-        limit: 30,
+      const response = await api.searchUserRhymes({
+        query: trimmed,
+        limit: clampLimit(limit),
+        min_score: clampMinScore(minScore),
+        rerank: false,
       });
-      setResponse(res);
-    } catch (e) {
-      setError(String(e));
+      setRhymeResponse(response);
+      setComments((current) => {
+        const next = { ...current };
+        for (const row of response.results ?? []) {
+          const key = resultKey(row);
+          if (next[key] == null) next[key] = row.feedback_comment ?? "";
+        }
+        return next;
+      });
+    } catch (caught) {
+      setError(backendError(caught));
     } finally {
       setLoading(false);
     }
-  }, [query, mode, weights]);
+  }, [limit, minScore, query]);
 
-  const highlightRhymes = useCallback(async (textOverride?: string) => {
-    const text = textOverride ?? highlightText;
-    if (!text.trim()) return;
-    setHighlightLoading(true);
-    setHighlightError(null);
+  const searchMeaning = useCallback(async () => {
+    const trimmed = query.trim();
+    if (!trimmed) return;
+    setLoading(true);
+    setError(null);
     try {
-      const res = await api.highlightRhymes({ text, context_radius: contextRadius });
-      setHighlightResponse(res);
-    } catch (e) {
-      setHighlightError(String(e));
+      setMeaningResponse(await api.searchMeaning({
+        query: trimmed,
+        limit: clampLimit(limit),
+        min_score: clampMinScore(minScore),
+      }));
+    } catch (caught) {
+      setError(backendError(caught));
     } finally {
-      setHighlightLoading(false);
+      setLoading(false);
     }
-  }, [highlightText, contextRadius]);
+  }, [limit, minScore, query]);
 
-  useEffect(() => {
-    let alive = true;
-    api.rakiText()
-      .then(async ({ text }) => {
-        if (!alive) return;
-        setHighlightText(text);
-        const res = await api.highlightRhymes({ text, context_radius: 6 });
-        if (!alive) return;
-        setHighlightResponse(res);
-      })
-      .catch((e) => {
-        if (alive) setHighlightError(String(e));
-      });
-    return () => { alive = false; };
-  }, []);
-
-  useEffect(() => {
-    let alive = true;
-    api.userTextSummary()
-      .then((summary) => {
-        if (alive) setUserSummary(summary);
-      })
-      .catch((e) => {
-        if (alive) setUserTextError(String(e));
-      });
-    return () => { alive = false; };
-  }, []);
-
-  const importUserTexts = useCallback(async () => {
-    setUserImporting(true);
-    setUserTextError(null);
-    try {
-      const summary = await api.importUserTexts({
-        prefer_pages_export: true,
-        context_radius: 12,
-      });
-      setUserSummary(summary);
-    } catch (e) {
-      setUserTextError(String(e));
-    } finally {
-      setUserImporting(false);
+  const runSearch = useCallback(() => {
+    if (axis === "rhymes") {
+      void searchRhymes();
+      return;
     }
-  }, []);
+    void searchMeaning();
+  }, [axis, searchMeaning, searchRhymes]);
 
-  const loadFullLibrary = useCallback(async () => {
-    setFullLibraryLoading(true);
-    setUserTextError(null);
-    try {
-      const library = await api.loadUserLibrary({ limit: 500 });
-      setFullLibrary(library);
-    } catch (e) {
-      setUserTextError(String(e));
-    } finally {
-      setFullLibraryLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadFullLibrary();
-  }, [loadFullLibrary]);
-
-  const searchUserRhymes = useCallback(async () => {
-    if (!userRhymeQuery.trim()) return;
-    setUserRhymeLoading(true);
-    setUserTextError(null);
-    try {
-      const res = await api.searchUserRhymes({
-        query: userRhymeQuery,
-        limit: 25,
-        min_score: 0.45,
-        rerank: useTrainedRerank,
-        rerank_candidate_count: 120,
-      });
-      setUserRhymeResponse(res);
-    } catch (e) {
-      setUserTextError(String(e));
-    } finally {
-      setUserRhymeLoading(false);
-    }
-  }, [userRhymeQuery, useTrainedRerank]);
-
-  const saveRhymeFeedback = useCallback(async (
+  const saveFeedback = useCallback(async (
     row: UserRhymeResult,
     rating: number,
     comment: string,
   ) => {
-    const queryForFeedback = userRhymeResponse?.query || userRhymeQuery;
+    const key = resultKey(row);
+    const queryForFeedback = rhymeResponse?.query || query.trim();
+    setPendingFeedback((current) => ({ ...current, [key]: true }));
+    setSavedFeedback((current) => ({ ...current, [key]: false }));
+    setFeedbackErrors((current) => ({ ...current, [key]: "" }));
+
     try {
-      const res = await api.saveRhymeFeedback({
+      const response = await api.saveRhymeFeedback({
         query: queryForFeedback,
         source_title: row.source_title,
         line_no: row.line_no,
@@ -537,941 +431,193 @@ export default function RhymeSearch() {
         rating,
         comment,
       });
-      setUserRhymeResponse((current) => {
+
+      setRhymeResponse((current) => {
         if (!current) return current;
         return {
           ...current,
           results: current.results.map((candidate) => {
-            const sameCandidate =
-              candidate.source_title === row.source_title &&
-              candidate.line_no === row.line_no &&
-              candidate.phrase === row.phrase;
-            if (!sameCandidate) return candidate;
+            if (resultKey(candidate) !== key) return candidate;
             return {
               ...candidate,
-              feedback_rating: res.feedback.rating,
-              feedback_comment: res.feedback.comment,
-              feedback_count: Math.max(candidate.feedback_count ?? 0, 1),
-              feedback_average: res.feedback.rating,
+              feedback_rating: response.feedback.rating,
+              feedback_comment: response.feedback.comment,
+              feedback_count: Math.max(asNumber(candidate.feedback_count), 1),
+              feedback_average: response.feedback.rating,
             };
           }),
         };
       });
-    } catch (e) {
-      setUserTextError(String(e));
-    }
-  }, [userRhymeQuery, userRhymeResponse?.query]);
-
-  const searchTextLibrary = useCallback(async () => {
-    if (!textLibraryQuery.trim()) return;
-    setTextLibraryLoading(true);
-    setUserTextError(null);
-    try {
-      const res = await api.searchUserTextLines({
-        query: textLibraryQuery,
-        limit: 25,
-      });
-      setTextLibraryResponse(res);
-    } catch (e) {
-      setUserTextError(String(e));
+      setComments((current) => ({ ...current, [key]: response.feedback.comment }));
+      setSavedFeedback((current) => ({ ...current, [key]: true }));
+    } catch (caught) {
+      setFeedbackErrors((current) => ({ ...current, [key]: backendError(caught) }));
     } finally {
-      setTextLibraryLoading(false);
+      setPendingFeedback((current) => ({ ...current, [key]: false }));
     }
-  }, [textLibraryQuery]);
-
-  const searchQuoteLibrary = useCallback(async () => {
-    if (!quoteLibraryQuery.trim()) return;
-    setQuoteLibraryLoading(true);
-    setUserTextError(null);
-    try {
-      const res = await api.searchUserQuotes({
-        query: quoteLibraryQuery,
-        limit: 25,
-        min_score: 0.25,
-      });
-      setQuoteLibraryResponse(res);
-    } catch (e) {
-      setUserTextError(String(e));
-    } finally {
-      setQuoteLibraryLoading(false);
-    }
-  }, [quoteLibraryQuery]);
-
-  const buildUserTraining = useCallback(async () => {
-    setTrainingLoading(true);
-    setUserTextError(null);
-    try {
-      const res = await api.buildUserTraining({
-        max_examples: 2000,
-        include_text_lines: true,
-      });
-      setTrainingBuild(res);
-    } catch (e) {
-      setUserTextError(String(e));
-    } finally {
-      setTrainingLoading(false);
-    }
-  }, []);
-
-  const trainLocalModel = useCallback(async () => {
-    setLocalModelLoading(true);
-    setUserTextError(null);
-    try {
-      const res = await api.trainLocalModel({
-        min_pair_score: 0.58,
-      });
-      setLocalModelTrain(res);
-    } catch (e) {
-      setUserTextError(String(e));
-    } finally {
-      setLocalModelLoading(false);
-    }
-  }, []);
-
-  const runUserPipeline = useCallback(async () => {
-    setPipelineLoading(true);
-    setUserTextError(null);
-    try {
-      const res = await api.runUserPipeline({
-        query: userRhymeQuery,
-        prefer_pages_export: true,
-        context_radius: 12,
-        max_examples: 2000,
-        min_pair_score: 0.58,
-        limit: 25,
-        min_score: 0.40,
-      });
-      setPipelineResponse(res);
-      setUserSummary(res.import);
-      setTrainingBuild(res.training);
-      setLocalModelTrain(res.model);
-      setUserRhymeResponse({
-        query: res.query,
-        results: res.search.results,
-        total_candidates: res.search.total_candidates,
-        retrieved_candidates: res.search.retrieved_candidates,
-        rerank: res.search.rerank,
-      });
-      setUseTrainedRerank(true);
-    } catch (e) {
-      setUserTextError(String(e));
-    } finally {
-      setPipelineLoading(false);
-    }
-  }, [userRhymeQuery]);
-
-  const rankPhrases = useCallback(async () => {
-    const candidates = phraseCandidates
-      .split(/\n|,/)
-      .map((c) => c.trim())
-      .filter(Boolean);
-    if (!phraseQuery.trim() || candidates.length === 0) return;
-    setPhraseLoading(true);
-    setPhraseError(null);
-    try {
-      const res = await api.rankPhrases({ query: phraseQuery, candidates });
-      setPhraseResponse(res);
-    } catch (e) {
-      setPhraseError(String(e));
-    } finally {
-      setPhraseLoading(false);
-    }
-  }, [phraseQuery, phraseCandidates]);
+  }, [query, rhymeResponse?.query]);
 
   return (
-    <div style={s.root}>
-      <h1 style={s.title}>🎵 Reim-Engine</h1>
-      <p style={s.sub}>German Phonological Rhyme Search · Python Backend Port 8003</p>
-
-      <section style={s.panelFirst}>
-        <h2 style={s.sectionTitle}>Silben-Reimkarte</h2>
-        <details style={s.details}>
-          <summary style={s.summary}>Reimkarte öffnen</summary>
-          <div style={s.mapControls}>
-            <button style={s.searchBtn} onClick={() => highlightRhymes()}>
-              {highlightLoading ? "⏳" : "Reime markieren"}
-            </button>
-            <label style={s.compactLabel}>
-              Umgebung
-              <input
-                type="range"
-                min={1}
-                max={16}
-                step={1}
-                value={contextRadius}
-                onChange={(e) => setContextRadius(parseInt(e.target.value, 10))}
-              />
-              <span style={s.wVal}>{contextRadius}</span>
-            </label>
-          </div>
-          <textarea
-            style={s.textarea}
-            value={highlightText}
-            onChange={(e) => setHighlightText(e.target.value)}
-            rows={8}
-          />
-          {highlightError && <div style={s.errorBox}>⚠️ {highlightError}</div>}
-          {highlightResponse && <RhymeHeatmap analysis={highlightResponse} />}
-        </details>
-      </section>
-
-      <section style={s.panel}>
-        <h2 style={s.sectionTitle}>Deine Bibliotheken</h2>
-        <h3 style={s.subSectionTitle}>Reimbibliothek</h3>
-        <div style={s.mapControls}>
-          <button style={s.searchBtn} onClick={importUserTexts}>
-            {userImporting ? "Import läuft" : "Inbox importieren"}
-          </button>
-          <button style={s.searchBtn} onClick={loadFullLibrary}>
-            {fullLibraryLoading ? "Lade" : "Alle Bibliotheken laden"}
-          </button>
-          <input
-            style={s.input}
-            value={userRhymeQuery}
-            onChange={(e) => setUserRhymeQuery(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && searchUserRhymes()}
-          />
-          <label style={s.compactLabel}>
-            <input
-              type="checkbox"
-              checked={useTrainedRerank}
-              onChange={(e) => setUseTrainedRerank(e.target.checked)}
-            />
-            trainiert
-          </label>
-          <button style={s.searchBtn} onClick={searchUserRhymes}>
-            {userRhymeLoading ? "Suche" : "DB suchen"}
-          </button>
+    <div className="rw-app">
+      <header className="rw-header">
+        <div className="rw-brand">
+          <div className="rw-logo">REiMWERKER</div>
+          <div className="rw-subline">Persönliche Rap-Reim-Bibliothek</div>
         </div>
-        {userTextError && <div style={s.errorBox}>⚠️ {userTextError}</div>}
-        {userSummary && (
-          <>
-            <div style={s.statGrid}>
-              <div style={s.statBox}><b>{userSummary.imported_count}</b><span>Importe</span></div>
-              <div style={s.statBox}><b>{userSummary.line_count}</b><span>Zeilen</span></div>
-              <div style={s.statBox}><b>{userSummary.rhyme_unit_count}</b><span>3-8-Silben-Units</span></div>
-              <div style={s.statBox}><b>{userSummary.rhyme_pair_count}</b><span>lokale Reimpaare</span></div>
-              <div style={s.statBox}><b>{userSummary.quote_count}</b><span>Quotes</span></div>
+        <HeaderStats summary={summary} />
+      </header>
+
+      <main className="rw-shell">
+        <div className="rw-workspace">
+          <section className="rw-panel rw-search-panel">
+            <div className="rw-panel-head">
+              <div className="rw-title-group">
+                <div className="rw-axis-switch" role="tablist" aria-label="Suchachse">
+                  <AxisButton active={axis === "rhymes"} onClick={() => setAxis("rhymes")}>🎤 Reime</AxisButton>
+                  <AxisButton active={axis === "meaning"} onClick={() => setAxis("meaning")}>💡 Bedeutung</AxisButton>
+                </div>
+                <h1 className="rw-title">{axis === "rhymes" ? "Reime trainieren" : "Bedeutung browsen"}</h1>
+              </div>
+              <div className="rw-status-line">
+                {activeResponse ? `${activeCount} Treffer · ${activeTotal} Kandidaten` : "Bereit"}
+              </div>
             </div>
-            {userSummary.documents.length > 0 && (
-              <div style={s.docList}>
-                {userSummary.documents.slice(0, 18).map((doc) => (
-                  <span key={doc.source_id} style={s.docPill}>
-                    {doc.title}: {doc.line_count}/{doc.rhyme_unit_count}
-                  </span>
-                ))}
-              </div>
-            )}
-            {userSummary.sample_pairs.length > 0 && (
-              <div style={s.samplePairs}>
-                {userSummary.sample_pairs.slice(0, 8).map((pair, i) => (
-                  <div key={`${pair.source_title}-${pair.left_line_no}-${pair.right_line_no}-${i}`} style={s.samplePair}>
-                    <b>{pair.left_phrase}</b> / <b>{pair.right_phrase}</b>
-                    <span>{pair.score.toFixed(3)} · {pair.source_title}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-            {userSummary.sample_quotes.length > 0 && (
-              <div style={s.samplePairs}>
-                {userSummary.sample_quotes.slice(0, 6).map((quote) => (
-                  <div key={`${quote.source_id}-${quote.line_no}`} style={s.samplePair}>
-                    <b>{quote.text}</b>
-                    <span>{quote.quote_score.toFixed(3)} · {quote.source_title}:{quote.line_no}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </>
-        )}
-        {userRhymeResponse && (
-          <>
-            <div style={s.meta}>
-              {userRhymeResponse.results.length} Treffer aus {userRhymeResponse.total_candidates} Units · Query:{" "}
-              <b>{userRhymeResponse.query}</b>
-              {userRhymeResponse.rerank?.enabled && (
-                <> · Rerank: <b>{userRhymeResponse.rerank.provider}</b></>
+
+            <div className="rw-mode-hint">{modeHint}</div>
+
+            <div className="rw-main-searchbar">
+              <input
+                className="rw-query-input"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") runSearch();
+                }}
+                placeholder="z.B. einfach machen, schattenkabinett, bewusstsein"
+                autoFocus
+              />
+              <button className="rw-primary-button" type="button" onClick={runSearch} disabled={loading}>
+                {loading ? "Suche..." : "Suchen"}
+              </button>
+              {axis === "rhymes" && (
+                <button className="rw-secondary-button" type="button" onClick={() => void searchRhymes()} disabled={loading || !rhymeResponse}>
+                  Erneut ranken ↻
+                </button>
               )}
             </div>
-            <table style={s.table}>
-              <thead>
-                <tr>
-                  {["#","Phrase","Score","Sil.","Bewertung","Quelle","Zeile","Kontext"].map((h) => (
-                    <th key={h} style={s.th}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {userRhymeResponse.results.map((r, i) => (
-                  <UserRhymeRow
-                    key={`${r.source_title}-${r.line_no}-${r.phrase}-${i}`}
-                    r={r}
-                    i={i}
-                    onFeedback={saveRhymeFeedback}
-                  />
-                ))}
-              </tbody>
-            </table>
-          </>
-        )}
-        {fullLibrary && (
-          <div style={s.fullLibrary}>
-            {fullLibrary.warning && <div style={s.errorBox}>{fullLibrary.warning}</div>}
-            <div style={s.statGrid}>
-              <div style={s.statBox}><b>{fullLibrary.counts.text_lines}</b><span>alle Textzeilen</span></div>
-              <div style={s.statBox}><b>{fullLibrary.counts.rhyme_units}</b><span>alle Reim-Units</span></div>
-              <div style={s.statBox}><b>{fullLibrary.counts.rhyme_pairs}</b><span>alle Reimpaare</span></div>
-              <div style={s.statBox}><b>{fullLibrary.counts.quotes}</b><span>alle Quotes</span></div>
+
+            <div className="rw-options-row">
+              <label className="rw-number-option">
+                <span>min. Score</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={minScore}
+                  onChange={(event) => setMinScore(clampMinScore(Number(event.target.value)))}
+                />
+              </label>
+              <label className="rw-number-option">
+                <span>Anzahl</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  step={1}
+                  value={limit}
+                  onChange={(event) => setLimit(clampLimit(Number(event.target.value)))}
+                />
+              </label>
+              <span className="rw-local-note">Kommentare bleiben lokal. Keine externen APIs.</span>
             </div>
 
-            <h3 style={s.subSectionTitle}>Alle Reimpaare aller Texte</h3>
-            {fullLibrary.rhyme_pairs.length > 0 ? (
-              <table style={s.table}>
-                <thead>
-                  <tr>
-                    {["#","Links","Rechts","Score","Quelle"].map((h) => <th key={h} style={s.th}>{h}</th>)}
-                  </tr>
-                </thead>
-                <tbody>
-                  {fullLibrary.rhyme_pairs.map((pair, i) => (
-                    <tr key={`${pair.source_title}-${pair.left_line_no}-${pair.right_line_no}-${i}`} style={{ background: i % 2 === 0 ? "#0f0f0f" : "#121212" }}>
-                      <td style={s.td}>{i + 1}</td>
-                      <td style={{ ...s.td, color: "#fff", fontWeight: 700 }}>{pair.left_phrase}</td>
-                      <td style={{ ...s.td, color: "#fff", fontWeight: 700 }}>{pair.right_phrase}</td>
-                      <td style={s.td}>{pair.score.toFixed(3)}</td>
-                      <td style={s.td}>{pair.source_title}:{pair.left_line_no}-{pair.right_line_no}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : <div style={s.noResults}>Keine Reimpaare. Erst Texte importieren.</div>}
+            {axis === "rhymes" && (
+              <div className="rw-learning-note">
+                0-3 = schlecht/kein Reim · 4-7 = ok · 8-10 = stark. Bewertungen ziehen ähnliche Muster mit; "Erneut ranken" zeigt den Lerneffekt.
+              </div>
+            )}
 
-            <h3 style={s.subSectionTitle}>Alle Reim-Units</h3>
-            {fullLibrary.rhyme_units.length > 0 ? (
-              <table style={s.table}>
-                <thead>
-                  <tr>
-                    {["#","Phrase","Sil.","Anchor","Quelle","Zeile"].map((h) => <th key={h} style={s.th}>{h}</th>)}
-                  </tr>
-                </thead>
-                <tbody>
-                  {fullLibrary.rhyme_units.map((unit, i) => (
-                    <tr key={`${unit.source_title}-${unit.line_no}-${unit.phrase}-${i}`} style={{ background: i % 2 === 0 ? "#0f0f0f" : "#121212" }}>
-                      <td style={s.td}>{i + 1}</td>
-                      <td style={{ ...s.td, color: "#fff", fontWeight: 700 }}>{unit.phrase}</td>
-                      <td style={s.td}>{unit.syllable_count}</td>
-                      <td style={s.td}>{unit.terminal_anchor}</td>
-                      <td style={s.td}>{unit.source_title}</td>
-                      <td style={{ ...s.td, color: "#777", fontSize: "0.75rem" }}>{unit.line_text}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : <div style={s.noResults}>Keine Reim-Units. Erst Texte importieren.</div>}
+            {error && <div className="rw-error-box">{error}</div>}
 
-            <h3 style={s.subSectionTitle}>Alle Texte</h3>
-            {fullLibrary.text_lines.length > 0 ? (
-              <table style={s.table}>
-                <thead>
-                  <tr>
-                    {["#","Textzeile","Worte","Quelle","Nr."].map((h) => <th key={h} style={s.th}>{h}</th>)}
-                  </tr>
-                </thead>
-                <tbody>
-                  {fullLibrary.text_lines.map((line, i) => (
-                    <tr key={`${line.source_title}-${line.line_no}-${i}`} style={{ background: i % 2 === 0 ? "#0f0f0f" : "#121212" }}>
-                      <td style={s.td}>{i + 1}</td>
-                      <td style={{ ...s.td, color: "#ddd" }}>{line.text}</td>
-                      <td style={s.td}>{line.word_count}</td>
-                      <td style={s.td}>{line.source_title}</td>
-                      <td style={s.td}>{line.line_no}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : <div style={s.noResults}>Keine Textzeilen. Erst Texte importieren.</div>}
-
-            <h3 style={s.subSectionTitle}>Alle Quotes</h3>
-            {fullLibrary.quotes.length > 0 ? (
-              <table style={s.table}>
-                <thead>
-                  <tr>
-                    {["#","Quote","Phrase","Score","Quelle"].map((h) => <th key={h} style={s.th}>{h}</th>)}
-                  </tr>
-                </thead>
-                <tbody>
-                  {fullLibrary.quotes.map((quote, i) => (
-                    <tr key={`${quote.source_title}-${quote.line_no}-${i}`} style={{ background: i % 2 === 0 ? "#0f0f0f" : "#121212" }}>
-                      <td style={s.td}>{i + 1}</td>
-                      <td style={{ ...s.td, color: "#fff", fontWeight: 700 }}>{quote.text}</td>
-                      <td style={s.td}>{quote.phrase}</td>
-                      <td style={s.td}>{quote.quote_score.toFixed(3)}</td>
-                      <td style={s.td}>{quote.source_title}:{quote.line_no}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : <div style={s.noResults}>Keine Quotes. Erst Texte importieren.</div>}
-          </div>
-        )}
-        <div style={s.libraryGrid}>
-          <div>
-            <h3 style={s.subSectionTitle}>Textbibliothek</h3>
-            <div style={s.row}>
-              <input
-                style={s.input}
-                value={textLibraryQuery}
-                onChange={(e) => setTextLibraryQuery(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && searchTextLibrary()}
-              />
-              <button style={s.searchBtn} onClick={searchTextLibrary}>
-                {textLibraryLoading ? "Suche" : "Text suchen"}
-              </button>
-            </div>
-            {textLibraryResponse && (
+            {axis === "rhymes" && rhymeResponse && (
               <>
-                <div style={s.meta}>
-                  {textLibraryResponse.results.length} Treffer aus {textLibraryResponse.total_candidates} Zeilen
+                <div className="rw-meta-row">
+                  <span>{rhymeResponse.results.length} Reim-Treffer für <b>{rhymeResponse.query}</b></span>
+                  <span>
+                    {rhymeResponse.retrieved_candidates ?? 0} geprüft
+                    {rhymeResponse.rerank?.enabled ? ` · Rerank ${rhymeResponse.rerank.provider}` : ""}
+                  </span>
                 </div>
-                <table style={s.table}>
-                  <thead>
-                    <tr>
-                      {["#","Zeile","Score","Hits","Quelle","Nr."].map((h) => (
-                        <th key={h} style={s.th}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {textLibraryResponse.results.map((r, i) => (
-                      <UserTextLineRow key={`${r.source_title}-${r.line_no}-${i}`} r={r} i={i} />
-                    ))}
-                  </tbody>
-                </table>
+                <div className="rw-result-grid">
+                  {rhymeResponse.results.length > 0 ? (
+                    rhymeResponse.results.map((row, index) => {
+                      const key = resultKey(row);
+                      return (
+                        <RhymeCard
+                          key={`${key}:${index}`}
+                          row={row}
+                          query={rhymeResponse.query}
+                          pending={Boolean(pendingFeedback[key])}
+                          saved={Boolean(savedFeedback[key])}
+                          error={feedbackErrors[key]}
+                          draftComment={comments[key] ?? row.feedback_comment ?? ""}
+                          onCommentChange={(comment) => setComments((current) => ({ ...current, [key]: comment }))}
+                          onFeedback={saveFeedback}
+                        />
+                      );
+                    })
+                  ) : (
+                    <div className="rw-empty">Keine Reim-Treffer für diese Suche.</div>
+                  )}
+                </div>
               </>
             )}
-          </div>
-          <div>
-            <h3 style={s.subSectionTitle}>Quote-Bibliothek</h3>
-            <div style={s.row}>
-              <input
-                style={s.input}
-                value={quoteLibraryQuery}
-                onChange={(e) => setQuoteLibraryQuery(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && searchQuoteLibrary()}
-              />
-              <button style={s.searchBtn} onClick={searchQuoteLibrary}>
-                {quoteLibraryLoading ? "Suche" : "Quotes suchen"}
-              </button>
-            </div>
-            {quoteLibraryResponse && (
+
+            {axis === "meaning" && meaningResponse && (
               <>
-                <div style={s.meta}>
-                  {quoteLibraryResponse.results.length} Treffer aus {quoteLibraryResponse.total_candidates} Quotes
+                <div className="rw-meta-row">
+                  <span>{meaningResponse.results.length} Bedeutungs-Treffer für <b>{meaningResponse.query}</b></span>
+                  <span>Achse {meaningResponse.axis ?? "meaning"} · read-only</span>
                 </div>
-                <table style={s.table}>
-                  <thead>
-                    <tr>
-                      {["#","Quote","Score","Quote","Reim","Phrase","Quelle","Grund"].map((h) => (
-                        <th key={h} style={s.th}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {quoteLibraryResponse.results.map((r, i) => (
-                      <UserQuoteRow key={`${r.source_title}-${r.line_no}-${i}`} r={r} i={i} />
-                    ))}
-                  </tbody>
-                </table>
+                <div className="rw-result-grid">
+                  {meaningResponse.results.length > 0 ? (
+                    meaningResponse.results.map((row, index) => (
+                      <MeaningCard key={`${row.source_title}-${row.line_no}-${index}`} row={row} />
+                    ))
+                  ) : (
+                    <div className="rw-empty">Keine thematischen Treffer für diese Suche.</div>
+                  )}
+                </div>
               </>
             )}
-          </div>
+
+            {!activeResponse && !error && (
+              <div className="rw-empty">Gib eine Phrase ein und starte die Suche.</div>
+            )}
+          </section>
         </div>
-        <div style={s.trainingBox}>
-          <div>
-            <h3 style={s.subSectionTitle}>Trainingsdaten</h3>
-          </div>
-          <button style={s.searchBtn} onClick={buildUserTraining}>
-            {trainingLoading ? "Baue" : "Training bauen"}
-          </button>
-          <button style={s.resetBtn} onClick={trainLocalModel}>
-            {localModelLoading ? "Trainiere" : "Modell trainieren"}
-          </button>
-          <button style={s.resetBtn} onClick={runUserPipeline}>
-            {pipelineLoading ? "Läuft" : "Pipeline laufen"}
-          </button>
-          {trainingBuild && (
-            <div style={s.trainingStats}>
-              <span>{trainingBuild.status}</span>
-              <span>{trainingBuild.example_count} Beispiele</span>
-              <span>{trainingBuild.rhyme_pair_count} Reimpaare</span>
-              <span>{trainingBuild.quote_count} Quotes</span>
-              <span>{trainingBuild.text_line_count} Zeilen</span>
-              <span>{trainingBuild.output_path}</span>
+
+        <aside className="rw-side">
+          <SummaryPanel
+            summary={summary}
+            loading={summaryLoading}
+            error={summaryError}
+            onRefresh={() => void loadSummary()}
+            onImport={() => void importUserTexts()}
+          />
+          <section className="rw-side-panel">
+            <h2 className="rw-side-title">API</h2>
+            <div className="rw-api-stack">
+              <span>{BACKEND_URL}</span>
+              <span>Reime: /api/rhymes/user-texts/search</span>
+              <span>Bedeutung: /api/rhymes/user-texts/search-meaning</span>
+              <span>Feedback: /api/rhymes/user-texts/feedback</span>
             </div>
-          )}
-          {localModelTrain && (
-            <div style={s.trainingStats}>
-              <span>{localModelTrain.status}</span>
-              <span>{localModelTrain.pair_count} Paare</span>
-              {localModelTrain.ideal_syllables && <span>{localModelTrain.ideal_syllables} Ideal-Silben</span>}
-              <span>{localModelTrain.model_path}</span>
-            </div>
-          )}
-          {pipelineResponse && (
-            <div style={s.trainingStats}>
-              <span>Pipeline: {pipelineResponse.status}</span>
-              <span>{pipelineResponse.import.imported_count} Importe</span>
-              <span>{pipelineResponse.training.example_count} Trainingsbeispiele</span>
-              <span>{pipelineResponse.model.pair_count} Modellpaare</span>
-              <span>{pipelineResponse.search.results.length} trainierte Treffer</span>
-            </div>
-          )}
-        </div>
-      </section>
-
-      {/* ── Eingabe ── */}
-      <h2 style={s.sectionTitle}>Wortsuche</h2>
-      <div style={s.row}>
-        <input
-          style={s.input}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && search()}
-          placeholder="Wort eingeben … z.B. Täterintrojekte"
-          autoFocus
-        />
-        <button style={s.searchBtn} onClick={search}>
-          {loading ? "⏳" : "🔍 Suchen"}
-        </button>
-      </div>
-
-      {/* ── Modus-Auswahl ── */}
-      <div style={s.modeRow}>
-        {(Object.keys(MODE_LABELS) as Mode[]).map((m) => (
-          <button
-            key={m}
-            style={s.modeBtn(m === mode)}
-            onClick={() => setMode(m)}
-          >
-            {MODE_LABELS[m]}
-          </button>
-        ))}
-      </div>
-
-      {/* ── Gewichte (kompakt) ── */}
-      <details style={s.details}>
-        <summary style={s.summary}>🎚️ Gewichte anpassen</summary>
-        <div style={s.weightRow}>
-          {(["stress","vowelCore","tail","syllableFlex"] as const).map((k) => (
-            <label key={k} style={s.weightLabel}>
-              <span style={s.wKey}>{k}</span>
-              <input
-                type="range" min={0} max={1} step={0.05}
-                value={weights[k] ?? 0}
-                onChange={(e) =>
-                  setWeights((w) => ({ ...w, [k]: parseFloat(e.target.value) }))
-                }
-                style={{ width: 90 }}
-              />
-              <span style={s.wVal}>{(weights[k] ?? 0).toFixed(2)}</span>
-            </label>
-          ))}
-          <button style={s.resetBtn} onClick={() => setWeights({})}>Reset</button>
-        </div>
-      </details>
-
-      {/* ── Fehler ── */}
-      {error && <div style={s.errorBox}>⚠️ {error}</div>}
-
-      {/* ── Analyse-Info ── */}
-      {response && (
-        <>
-          <QueryInfo feat={response.query} target={response.target} />
-
-          <div style={s.meta}>
-            {response.results.length} Treffer ·
-            Modus: <b>{response.mode}</b> ·
-            Target: <b style={{ color: isTerminal ? "#f0c040" : "#5fca5f" }}>
-              {response.target}
-            </b>
-          </div>
-
-          {/* ── Ergebnis-Tabelle ── */}
-          {response.results.length > 0 ? (
-            <table style={s.table}>
-              <thead>
-                <tr>
-                  {["#","Wort","Sil.","Stress",
-                    isTerminal ? "terminalVowelSpine" : "vowelSpine",
-                    isTerminal ? "terminalTail"       : "tail",
-                    "Score","Detail"
-                  ].map((h) => (
-                    <th key={h} style={s.th}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {response.results.map((c, i) => (
-                  <CandidateRow key={c.text} c={c} i={i} isTerminal={isTerminal} />
-                ))}
-              </tbody>
-            </table>
-          ) : (
-            <div style={s.noResults}>
-              Keine Treffer für diesen Modus. Versuche "Dirty" oder "Balanced".
-            </div>
-          )}
-        </>
-      )}
-
-      <section style={s.panel}>
-        <h2 style={s.sectionTitle}>Phrase-Ranker</h2>
-        <div style={s.phraseGrid}>
-          <label style={s.fieldLabel}>
-            Query
-            <input
-              style={s.input}
-              value={phraseQuery}
-              onChange={(e) => setPhraseQuery(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && rankPhrases()}
-            />
-          </label>
-          <label style={s.fieldLabel}>
-            Kandidaten
-            <textarea
-              style={s.textarea}
-              value={phraseCandidates}
-              onChange={(e) => setPhraseCandidates(e.target.value)}
-              rows={8}
-            />
-          </label>
-        </div>
-        <button style={s.searchBtn} onClick={rankPhrases}>
-          {phraseLoading ? "⏳" : "Phrasen ranken"}
-        </button>
-
-        {phraseError && <div style={s.errorBox}>⚠️ {phraseError}</div>}
-
-        {phraseResponse && (
-          <>
-            <div style={s.meta}>
-              {phraseResponse.ranked.length} Kandidaten · Query:{" "}
-              <b>{phraseResponse.query}</b>
-            </div>
-            <table style={s.table}>
-              <thead>
-                <tr>
-                  {["#","Phrase","Score","Anchor","Tail","Vowel","Cadence","Gate","Grund"].map((h) => (
-                    <th key={h} style={s.th}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {phraseResponse.ranked.map((r, i) => (
-                  <PhraseRow key={`${r.phrase}-${i}`} r={r} i={i} />
-                ))}
-              </tbody>
-            </table>
-          </>
-        )}
-      </section>
+          </section>
+          <SourcePanel summary={summary} />
+        </aside>
+      </main>
     </div>
   );
 }
-
-// ── Styles ────────────────────────────────────────────────────────────────────
-
-const s = {
-  root: {
-    fontFamily: "'JetBrains Mono','Fira Code',monospace",
-    maxWidth: 960,
-    margin: "0 auto",
-    padding: "2rem 1rem",
-    background: "#0d0d0d",
-    color: "#e8e8e8",
-    minHeight: "100vh",
-  } as React.CSSProperties,
-  title: { fontSize: "1.8rem", color: "#f0c040", marginBottom: 4 } as React.CSSProperties,
-  sub: { color: "#555", fontSize: "0.8rem", marginBottom: "1.5rem" } as React.CSSProperties,
-  sectionTitle: {
-    color: "#ddd", fontSize: "1rem", margin: "0 0 0.6rem 0",
-  } as React.CSSProperties,
-  subSectionTitle: {
-    color: "#aaa", fontSize: "0.86rem", margin: "0.9rem 0 0.45rem 0",
-  } as React.CSSProperties,
-  row: { display: "flex", gap: "0.5rem", marginBottom: "0.75rem" } as React.CSSProperties,
-  input: {
-    flex: 1, padding: "0.7rem 1rem", fontSize: "1.1rem",
-    background: "#1a1a1a", border: "1px solid #444",
-    borderRadius: 6, color: "#fff", outline: "none",
-  } as React.CSSProperties,
-  searchBtn: {
-    padding: "0.7rem 1.4rem", background: "#f0c040",
-    color: "#0d0d0d", border: "none", borderRadius: 6,
-    cursor: "pointer", fontWeight: 700,
-  } as React.CSSProperties,
-  modeRow: { display: "flex", flexWrap: "wrap" as const, gap: "0.4rem", marginBottom: "0.75rem" },
-  modeBtn: (active: boolean) => ({
-    padding: "0.3rem 0.8rem",
-    background: active ? "#f0c040" : "#1a1a1a",
-    color: active ? "#0d0d0d" : "#888",
-    border: `1px solid ${active ? "#f0c040" : "#333"}`,
-    borderRadius: 4, cursor: "pointer", fontSize: "0.82rem",
-    fontWeight: active ? 700 : 400,
-  }) as React.CSSProperties,
-  details: { marginBottom: "0.75rem" } as React.CSSProperties,
-  summary: { color: "#666", cursor: "pointer", fontSize: "0.85rem" } as React.CSSProperties,
-  weightRow: { display: "flex", flexWrap: "wrap" as const, gap: "0.5rem", marginTop: "0.5rem" },
-  weightLabel: { display: "flex", alignItems: "center", gap: "0.3rem", fontSize: "0.8rem" } as React.CSSProperties,
-  wKey: { color: "#888", minWidth: 90 } as React.CSSProperties,
-  wVal: { color: "#f0c040", minWidth: 32, textAlign: "right" as const },
-  resetBtn: {
-    padding: "0.2rem 0.6rem", background: "#1a1a1a",
-    color: "#888", border: "1px solid #333", borderRadius: 4,
-    cursor: "pointer", fontSize: "0.8rem",
-  } as React.CSSProperties,
-  errorBox: {
-    color: "#ca5f5f", background: "#1a0000",
-    border: "1px solid #5a1a1a", borderRadius: 6,
-    padding: "0.75rem 1rem", marginBottom: "0.75rem",
-  } as React.CSSProperties,
-  infoBox: {
-    background: "#111", border: "1px solid #2a2a2a",
-    borderRadius: 6, padding: "0.6rem 1rem",
-    marginBottom: "0.75rem", fontSize: "0.82rem", lineHeight: 1.8,
-  } as React.CSSProperties,
-  label: { color: "#888", marginRight: "0.3rem" } as React.CSSProperties,
-  dimLabel: { color: "#555", marginRight: "0.3rem", fontSize: "0.78rem" } as React.CSSProperties,
-  val: { color: "#e0c060", marginRight: "1.2rem" } as React.CSSProperties,
-  meta: { color: "#555", fontSize: "0.8rem", marginBottom: "0.5rem" } as React.CSSProperties,
-  table: { width: "100%", borderCollapse: "collapse" as const, fontSize: "0.83rem" },
-  th: {
-    textAlign: "left" as const, padding: "0.35rem 0.6rem",
-    borderBottom: "1px solid #2a2a2a", color: "#888", fontWeight: 500,
-  },
-  td: { padding: "0.35rem 0.6rem", borderBottom: "1px solid #1a1a1a", color: "#ccc" },
-  ratingScale: {
-    display: "grid",
-    gridTemplateColumns: "repeat(11, 1.65rem)",
-    gap: "0.18rem",
-    alignItems: "center",
-  } as React.CSSProperties,
-  ratingBtn: {
-    width: "1.65rem",
-    height: "1.65rem",
-    padding: 0,
-    background: "#181818",
-    color: "#888",
-    border: "1px solid #333",
-    borderRadius: 4,
-    cursor: "pointer",
-    fontSize: "0.72rem",
-    lineHeight: 1,
-  } as React.CSSProperties,
-  ratingBtnActive: {
-    background: "#f0c040",
-    color: "#0d0d0d",
-    borderColor: "#f0c040",
-    fontWeight: 800,
-  } as React.CSSProperties,
-  feedbackMeta: {
-    display: "flex",
-    alignItems: "center",
-    gap: "0.5rem",
-    marginTop: "0.3rem",
-    color: "#666",
-    fontSize: "0.72rem",
-  } as React.CSSProperties,
-  commentToggle: {
-    padding: 0,
-    background: "transparent",
-    border: "none",
-    color: "#888",
-    cursor: "pointer",
-    fontSize: "0.72rem",
-    textDecoration: "underline",
-  } as React.CSSProperties,
-  feedbackTextarea: {
-    width: "100%",
-    minHeight: "4rem",
-    boxSizing: "border-box" as const,
-    marginBottom: "0.45rem",
-    padding: "0.6rem 0.7rem",
-    background: "#151515",
-    border: "1px solid #333",
-    borderRadius: 6,
-    color: "#ddd",
-    fontFamily: "inherit",
-    fontSize: "0.84rem",
-    resize: "vertical" as const,
-  } as React.CSSProperties,
-  noResults: { color: "#555", padding: "1rem" } as React.CSSProperties,
-  panelFirst: {
-    marginBottom: "2rem", paddingBottom: "1rem",
-    borderBottom: "1px solid #242424",
-  } as React.CSSProperties,
-  panel: {
-    marginTop: "2rem", paddingTop: "1rem",
-    borderTop: "1px solid #242424",
-  } as React.CSSProperties,
-  mapControls: {
-    display: "flex",
-    alignItems: "center",
-    gap: "0.75rem",
-    marginBottom: "0.75rem",
-    flexWrap: "wrap" as const,
-  } as React.CSSProperties,
-  statGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(135px, 1fr))",
-    gap: "0.5rem",
-    marginBottom: "0.75rem",
-  } as React.CSSProperties,
-  statBox: {
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: "0.15rem",
-    background: "#111",
-    border: "1px solid #2a2a2a",
-    borderRadius: 6,
-    padding: "0.6rem 0.75rem",
-    color: "#777",
-    fontSize: "0.76rem",
-  } as React.CSSProperties,
-  docList: {
-    display: "flex",
-    flexWrap: "wrap" as const,
-    gap: "0.4rem",
-    marginBottom: "0.75rem",
-  } as React.CSSProperties,
-  docPill: {
-    border: "1px solid #333",
-    borderRadius: 4,
-    padding: "0.25rem 0.45rem",
-    color: "#888",
-    background: "#111",
-    fontSize: "0.72rem",
-  } as React.CSSProperties,
-  samplePairs: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
-    gap: "0.45rem",
-    marginBottom: "0.75rem",
-  } as React.CSSProperties,
-  samplePair: {
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: "0.2rem",
-    background: "#111",
-    border: "1px solid #2a2a2a",
-    borderRadius: 6,
-    padding: "0.55rem 0.65rem",
-    color: "#ccc",
-    fontSize: "0.75rem",
-  } as React.CSSProperties,
-  libraryGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-    gap: "1rem",
-    marginTop: "1rem",
-  } as React.CSSProperties,
-  fullLibrary: {
-    display: "grid",
-    gap: "0.75rem",
-    margin: "1rem 0",
-    paddingTop: "0.75rem",
-    borderTop: "1px solid #242424",
-  } as React.CSSProperties,
-  trainingBox: {
-    display: "flex",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    gap: "0.75rem",
-    flexWrap: "wrap" as const,
-    borderTop: "1px solid #242424",
-    marginTop: "1rem",
-    paddingTop: "0.75rem",
-  } as React.CSSProperties,
-  trainingStats: {
-    display: "flex",
-    flexWrap: "wrap" as const,
-    gap: "0.4rem",
-    width: "100%",
-    color: "#777",
-    fontSize: "0.74rem",
-  } as React.CSSProperties,
-  compactLabel: {
-    display: "flex",
-    alignItems: "center",
-    gap: "0.45rem",
-    color: "#888",
-    fontSize: "0.8rem",
-  } as React.CSSProperties,
-  heatmap: {
-    marginTop: "0.75rem",
-    background: "#111",
-    border: "1px solid #2a2a2a",
-    borderRadius: 6,
-    padding: "0.75rem 0",
-    overflowX: "auto" as const,
-  } as React.CSSProperties,
-  highlightLine: {
-    display: "flex",
-    gap: "0.75rem",
-    minHeight: "1.55rem",
-    lineHeight: 1.65,
-    whiteSpace: "pre-wrap" as const,
-    padding: "0 0.85rem",
-  } as React.CSSProperties,
-  lineNo: {
-    flex: "0 0 2.2rem",
-    color: "#555",
-    textAlign: "right" as const,
-    userSelect: "none" as const,
-  } as React.CSSProperties,
-  syllable: {
-    borderBottom: "2px solid transparent",
-    borderRadius: 3,
-    padding: "0 1px",
-  } as React.CSSProperties,
-  legend: {
-    display: "flex",
-    flexWrap: "wrap" as const,
-    gap: "0.45rem 0.7rem",
-    margin: "0.5rem 0",
-  } as React.CSSProperties,
-  legendItem: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: "0.3rem",
-    color: "#777",
-    fontSize: "0.74rem",
-  } as React.CSSProperties,
-  legendSwatch: {
-    width: 10,
-    height: 10,
-    borderRadius: 2,
-    display: "inline-block",
-  } as React.CSSProperties,
-  phraseGrid: {
-    display: "grid",
-    gridTemplateColumns: "minmax(220px, 0.7fr) minmax(260px, 1.3fr)",
-    gap: "0.75rem",
-    marginBottom: "0.75rem",
-  } as React.CSSProperties,
-  fieldLabel: {
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: "0.35rem",
-    color: "#888",
-    fontSize: "0.8rem",
-  } as React.CSSProperties,
-  textarea: {
-    width: "100%", boxSizing: "border-box" as const,
-    padding: "0.7rem 1rem", fontSize: "0.95rem",
-    background: "#1a1a1a", border: "1px solid #444",
-    borderRadius: 6, color: "#fff", outline: "none",
-    fontFamily: "'JetBrains Mono','Fira Code',monospace",
-    resize: "vertical" as const,
-  } as React.CSSProperties,
-};
