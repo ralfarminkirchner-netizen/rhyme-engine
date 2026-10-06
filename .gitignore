@@ -23,6 +23,7 @@ app/data/user_texts/extracted/*
 app/data/user_texts/training/*
 app/data/user_texts/*.sqlite
 app/data/user_texts/import_summary.json
+app/data/user_texts/archive/
 !app/data/user_texts/.gitkeep
 !app/data/user_texts/inbox/.gitkeep
 !app/data/user_texts/extracted/.gitkeep

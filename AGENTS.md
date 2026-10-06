@@ -44,6 +44,15 @@ Erwartet sind nur `.gitkeep` Dateien im Datenordner.
 
 ## Lokale Pipeline
 
+## Songgedächtnis
+
+Vor neuen Songtexten oder Überarbeitungen passende Quellen aus dem privaten
+`ralfarminkirchner-netizen/mindlaxy-vault` unter `songtexte/` abrufen und dessen
+README beachten. Aussage, Reimtechnik und Rhythmus getrennt bewerten. Gute Aussagen
+nicht wegen schwacher Reime verwerfen. Originale, Versionen und Kontext erhalten;
+keine Nutzerfreigaben erfinden. Der direkte Import und die Passage-Bewertung sind
+in `docs/song_archive.md` dokumentiert. Keine privaten Texte hier committen.
+
 Der komplette private Workflow ist:
 
 ```bash

@@ -723,6 +723,14 @@ def refresh_user_text_database(
     prefer_pages_export: bool = True,
     context_radius: int = 12,
 ) -> UserTextDatabaseSummary:
+    from app.services.song_archive import sync_configured_archive
+
+    archive_warning = ""
+    try:
+        sync_configured_archive(inbox_dir)
+    except (ValueError, RuntimeError, OSError, KeyError) as exc:
+        archive_warning = f"Songarchiv nicht aktualisiert: {type(exc).__name__}. Lokale Quellen bleiben nutzbar."
+
     extracted_dir = data_root / "extracted"
     db_path = data_root / "rhyme_database.sqlite"
     summary_path = data_root / "import_summary.json"
@@ -732,7 +740,7 @@ def refresh_user_text_database(
     documents: List[ImportedDocumentInfo] = []
     doc_lines: Dict[str, List[str]] = {}
     units: List[RhymeUnit] = []
-    warnings: List[str] = []
+    warnings: List[str] = [archive_warning] if archive_warning else []
     next_unit_id = 1
 
     for path in sources:
