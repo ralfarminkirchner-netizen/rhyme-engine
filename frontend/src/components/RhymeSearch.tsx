@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { api } from "../api/client";
+import RhymeGraph from "./RhymeGraph";
+import RhymeAtlas from "./RhymeAtlas";
 import type {
   UserMeaningResult,
   UserMeaningSearchResponse,
@@ -302,6 +304,7 @@ function SourcePanel({ summary }: { summary: UserTextSummary | null }) {
 }
 
 export default function RhymeSearch() {
+  const [workspace, setWorkspace] = useState<"library" | "graph" | "atlas">("atlas");
   const [axis, setAxis] = useState<Axis>("rhymes");
   const [query, setQuery] = useState("einfach machen");
   const [limit, setLimit] = useState(25);
@@ -461,15 +464,23 @@ export default function RhymeSearch() {
     <div className="rw-app">
       <header className="rw-header">
         <div className="rw-brand">
-          <div className="rw-logo">REiMWERKER</div>
-          <div className="rw-subline">Persönliche Rap-Reim-Bibliothek</div>
+          <div className="rw-logo">{workspace === "atlas" ? "REiMWERK" : "REiMWERKER"}</div>
+          <div className="rw-subline">{workspace === "atlas" ? "Reimatlas & Klangwerkstatt" : "Persönliche Rap-Reim-Bibliothek"}</div>
         </div>
-        <HeaderStats summary={summary} />
+        {workspace !== "atlas" && <HeaderStats summary={summary} />}
       </header>
 
-      <main className="rw-shell">
+      <nav className="rwg-workspace-nav" aria-label="Arbeitsbereich">
+        <button type="button" className={workspace === "atlas" ? "is-active" : ""} aria-pressed={workspace === "atlas"} onClick={() => setWorkspace("atlas")}>Reimatlas <span>Neue Klangnachbarn</span></button>
+        <button type="button" className={workspace === "graph" ? "is-active" : ""} aria-pressed={workspace === "graph"} onClick={() => setWorkspace("graph")}>Reimvergleich <span>Vorhandene Reime prüfen</span></button>
+        <button type="button" className={workspace === "library" ? "is-active" : ""} aria-pressed={workspace === "library"} onClick={() => setWorkspace("library")}>Bibliothek <span>Reime & Bedeutung</span></button>
+      </nav>
+
+      <main className={`rw-shell ${workspace === "atlas" ? "rwa-atlas-shell" : workspace === "graph" ? "rwg-graph-shell" : ""}`}>
         <div className="rw-workspace">
-          <section className="rw-panel rw-search-panel">
+          <div hidden={workspace !== "atlas"}><RhymeAtlas /></div>
+          <div hidden={workspace !== "graph"}><RhymeGraph /></div>
+          <section className="rw-panel rw-search-panel" hidden={workspace !== "library"}>
             <div className="rw-panel-head">
               <div className="rw-title-group">
                 <div className="rw-axis-switch" role="tablist" aria-label="Suchachse">

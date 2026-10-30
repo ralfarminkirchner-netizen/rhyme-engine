@@ -105,6 +105,14 @@ app.add_middleware(
 
 app.include_router(rhymes_router.router)
 
+from app.api.routes.rhyme_graph import router as graph_router
+
+app.include_router(graph_router)
+
+from app.api.routes.rhyme_atlas import router as atlas_router
+
+app.include_router(atlas_router)
+
 
 # ── Reim-Trainer (lokales, privates Trainingsfeld) ───────────────────────────
 # Wird VOR dem "/"-Static-Mount registriert, damit die Route Vorrang hat.

@@ -27,6 +27,7 @@ app/data/user_texts/import_summary.json
 !app/data/user_texts/inbox/.gitkeep
 !app/data/user_texts/extracted/.gitkeep
 cache/
+app/data/atlas/
 
 # Halte nur das Beispiel-Stub fest
 !app/data/.gitkeep

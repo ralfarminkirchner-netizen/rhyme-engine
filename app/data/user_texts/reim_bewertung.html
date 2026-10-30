@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>REiMWERK · Reim-Trainer & Bewertungsbogen</title>
+<style>
+  :root {
+    --bg: #0b0f14;
+    --card: #151a22;
+    --card-hover: #1c222d;
+    --line: #262e3d;
+    --ink: #e8ecf2;
+    --mut: #8e99a8;
+    --good: #2ecc71;
+    --mid: #f1c40f;
+    --bad: #e74c3c;
+    --acc: #6366f1;
+    --acc-hover: #4f46e5;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    padding-bottom: 110px;
+  }
+  header {
+    background: #0f141c;
+    padding: 24px 28px 18px;
+    border-bottom: 1px solid var(--line);
+  }
+  .header-content {
+    max-width: 960px;
+    margin: 0 auto;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 20px;
+    flex-wrap: wrap;
+  }
+  h1 { font-size: 21px; margin: 0 0 6px; color: #fff; font-weight: 700; letter-spacing: -0.01em; }
+  .badge-tag {
+    display: inline-block;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    background: rgba(99, 102, 241, 0.2);
+    color: #a5b4fc;
+    border: 1px solid rgba(99, 102, 241, 0.35);
+    border-radius: 4px;
+    margin-bottom: 8px;
+  }
+  .sub { color: var(--mut); font-size: 13px; line-height: 1.6; max-width: 760px; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 20px 16px; }
+
+  /* Live Tester Box */
+  .live-tester {
+    background: #121720;
+    border: 1px solid #333d4e;
+    border-radius: 12px;
+    padding: 16px 20px;
+    margin-bottom: 24px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+  }
+  .live-tester h3 { margin: 0 0 10px; font-size: 14px; color: #cbd5e1; text-transform: uppercase; letter-spacing: 0.05em; display: flex; align-items: center; gap: 8px; }
+  .tester-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .tester-input {
+    flex: 1;
+    min-width: 180px;
+    background: #090c10;
+    border: 1px solid var(--line);
+    color: #fff;
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 14px;
+  }
+  .tester-input:focus { outline: none; border-color: var(--acc); }
+  .tester-btn {
+    background: var(--acc);
+    color: #fff;
+    border: none;
+    padding: 10px 18px;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .tester-btn:hover { background: var(--acc-hover); }
+
+  /* Cards */
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--acc);
+    border-radius: 12px;
+    padding: 16px 18px;
+    margin: 14px 0;
+    transition: transform 0.15s, border-color 0.15s;
+  }
+  .card:hover { border-color: #3b465a; }
+  .card.rated { opacity: 0.75; border-left-color: var(--good) !important; }
+  .pair {
+    font-size: 17px;
+    font-weight: 700;
+    color: #f8fafc;
+    letter-spacing: 0.01em;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .pair .arrow { color: var(--acc); font-weight: normal; opacity: 0.8; }
+  .meta {
+    color: var(--mut);
+    font-size: 12px;
+    margin-top: 8px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .badge {
+    background: #0d1117;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 2px 8px;
+    color: #cbd5e1;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 11px;
+  }
+  .scale {
+    display: flex;
+    gap: 6px;
+    margin-top: 14px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .scale button {
+    width: 38px;
+    height: 38px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: #1b212c;
+    color: var(--ink);
+    cursor: pointer;
+    font-weight: 700;
+    font-size: 14px;
+    transition: all 0.12s;
+  }
+  .scale button:hover { border-color: var(--acc); transform: translateY(-1px); }
+  .scale button.sel { outline: 2px solid #fff; outline-offset: 1px; color: #fff; }
+  .lab { color: var(--mut); font-size: 12px; font-weight: 600; margin-right: 6px; }
+  .cmt {
+    margin-top: 10px;
+    width: 100%;
+    background: #0d1117;
+    color: var(--ink);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 13px;
+    resize: vertical;
+  }
+  .cmt:focus { outline: none; border-color: var(--acc); }
+
+  /* Fixed Footer */
+  footer {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: rgba(15, 20, 28, 0.95);
+    backdrop-filter: blur(12px);
+    border-top: 1px solid var(--line);
+    padding: 14px 24px;
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    justify-content: space-between;
+    z-index: 100;
+  }
+  .prog { font-size: 14px; color: #cbd5e1; }
+  .prog b { color: #fff; font-size: 16px; }
+  .btns { display: flex; gap: 10px; }
+  .btn {
+    background: var(--acc);
+    color: #fff;
+    border: 0;
+    border-radius: 8px;
+    padding: 10px 18px;
+    font-weight: 600;
+    cursor: pointer;
+    font-size: 13px;
+    transition: background 0.15s;
+  }
+  .btn:hover { background: var(--acc-hover); }
+  .btn.ghost { background: #1c222d; color: var(--ink); border: 1px solid var(--line); }
+  .btn.ghost:hover { background: #262e3d; }
+  .hint { color: var(--mut); font-size: 12px; margin-left: 8px; }
+  .nav-link { color: #818cf8; text-decoration: none; font-size: 13px; margin-right: 15px; }
+  .nav-link:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<header>
+  <div class="header-content">
+    <div>
+      <span class="badge-tag">REiMWERK · Trainingslabor</span>
+      <h1>Reim-Trainer & Bewertungsbogen</h1>
+      <div class="sub">
+        Bewerte Reim-Paare von <b>0</b> (kein Reim / unsauber) bis <b>10</b> (herausragender Rap-Reim, treffsicherer Flow).
+        Deine Bewertungen werden lokal im Browser gespeichert und trainieren die Gewichtung der phonetischen Reim-Engine.
+      </div>
+    </div>
+    <div>
+      <a href="/" class="nav-link">← Zurück zur Klangkarte & Reimgraph</a>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+  <!-- Live Tester -->
+  <div class="live-tester">
+    <h3><span>⚡</span> Eigenes Paar spontan live bewerten</h3>
+    <div class="tester-row">
+      <input type="text" id="live-left" class="tester-input" placeholder="Wort / Phrase A (z. B. Gewichtung)">
+      <span style="color:var(--mut);">↔</span>
+      <input type="text" id="live-right" class="tester-input" placeholder="Wort / Phrase B (z. B. Richtung)">
+      <button class="tester-btn" id="live-add-btn">Hinzufügen & Bewerten</button>
+    </div>
+  </div>
+
+  <div id="list"></div>
+</div>
+
+<footer>
+  <div class="prog">
+    <b id="done">0</b> / <span id="total-count">0</span> Paare bewertet
+    <span class="hint">0–3: verworfen · 4–7: brauchbar · 8–10: Highlight</span>
+  </div>
+  <div class="btns">
+    <button class="btn ghost" id="resetBtn">Zurücksetzen</button>
+    <button class="btn" id="exportBtn">Export JSON (Feedback sichern)</button>
+  </div>
+</footer>
+
+<script>
+const INITIAL_PAIRS = [
+  // Band 1: Engine-Score 0.88 - 1.00 (Sehr hohe klangliche Übereinstimmung)
+  {
+    left: "dein Reim ist ein Käfig", right: "meiner öffnet die Richtung",
+    left_syl: 6, right_syl: 7, score: 0.720, anchor: 0.85, tail: 0.75, vowel: 0.82, cadence: 0.65,
+    band: "0.72+", query: "dein Reim ist ein Käfig", source_title: "Battle Runde 1", line_no: 1, phrase: "meiner öffnet die Richtung"
+  },
+  {
+    left: "Gewichtung", right: "Richtung",
+    left_syl: 3, right_syl: 2, score: 0.920, anchor: 0.95, tail: 0.92, vowel: 0.90, cadence: 0.91,
+    band: "0.88+", query: "Gewichtung", source_title: "MCGPT Eröffnung", line_no: 1, phrase: "Richtung"
+  },
+  {
+    left: "zeichnet den Raum", right: "zweifelst am Traum",
+    left_syl: 4, right_syl: 4, score: 0.915, anchor: 0.94, tail: 0.93, vowel: 0.92, cadence: 0.88,
+    band: "0.88+", query: "zeichnet den Raum", source_title: "MC Gemini Konter", line_no: 2, phrase: "zweifelst am Traum"
+  },
+  {
+    left: "vermesst das Terrain", right: "Wände nicht steh’n",
+    left_syl: 5, right_syl: 5, score: 0.885, anchor: 0.90, tail: 0.88, vowel: 0.89, cadence: 0.86,
+    band: "0.88+", query: "vermesst das Terrain", source_title: "MC Grok Punchline", line_no: 3, phrase: "Wände nicht steh’n"
+  },
+  {
+    left: "Schattenkabinett", right: "matten Parkett",
+    left_syl: 5, right_syl: 4, score: 0.890, anchor: 0.92, tail: 0.89, vowel: 0.91, cadence: 0.85,
+    band: "0.88+", query: "Schattenkabinett", source_title: "RAKi-DiCH Archiv", line_no: 4, phrase: "matten Parkett"
+  },
+  {
+    left: "Klangarchitektur", right: "Brandmarkenspur",
+    left_syl: 5, right_syl: 4, score: 0.840, anchor: 0.87, tail: 0.86, vowel: 0.85, cadence: 0.80,
+    band: "0.80+", query: "Klangarchitektur", source_title: "Reimwerk Standard", line_no: 5, phrase: "Brandmarkenspur"
+  },
+  {
+    left: "Silbenverschiebung", right: "Widerstandsübung",
+    left_syl: 5, right_syl: 5, score: 0.860, anchor: 0.88, tail: 0.87, vowel: 0.86, cadence: 0.83,
+    band: "0.80+", query: "Silbenverschiebung", source_title: "Flowtherapie", line_no: 6, phrase: "Widerstandsübung"
+  },
+  {
+    left: "Lichtgestalt", right: "dicht geballt",
+    left_syl: 3, right_syl: 3, score: 0.875, anchor: 0.90, tail: 0.87, vowel: 0.89, cadence: 0.85,
+    band: "0.80+", query: "Lichtgestalt", source_title: "Lyrikarchiv", line_no: 7, phrase: "dicht geballt"
+  },
+  {
+    left: "Wortgewandt", right: "ortsbekannt",
+    left_syl: 3, right_syl: 3, score: 0.795, anchor: 0.82, tail: 0.80, vowel: 0.81, cadence: 0.76,
+    band: "0.72+", query: "Wortgewandt", source_title: "NRA Bandarchiv", line_no: 8, phrase: "ortsbekannt"
+  },
+  {
+    left: "niedergehen", right: "wiedersehen",
+    left_syl: 4, right_syl: 4, score: 0.940, anchor: 0.96, tail: 0.95, vowel: 0.94, cadence: 0.92,
+    band: "0.88+", query: "niedergehen", source_title: "Klassiker", line_no: 9, phrase: "wiedersehen"
+  },
+  {
+    left: "Dunkelheit", right: "Trunkenheit",
+    left_syl: 3, right_syl: 3, score: 0.810, anchor: 0.84, tail: 0.82, vowel: 0.83, cadence: 0.78,
+    band: "0.80+", query: "Dunkelheit", source_title: "NRA Relikte", line_no: 10, phrase: "Trunkenheit"
+  },
+  {
+    left: "Schnittmenge", right: "Schrittlänge",
+    left_syl: 3, right_syl: 3, score: 0.730, anchor: 0.78, tail: 0.74, vowel: 0.75, cadence: 0.70,
+    band: "0.72+", query: "Schnittmenge", source_title: "Spiral Mind", line_no: 11, phrase: "Schrittlänge"
+  }
+];
+
+const KEY = "reimwerk_trainer_ratings_v1";
+const PAIRS_KEY = "reimwerk_trainer_pairs_v1";
+
+let pairs = [...INITIAL_PAIRS];
+try {
+  const custom = JSON.parse(localStorage.getItem(PAIRS_KEY) || "[]");
+  if (Array.isArray(custom) && custom.length > 0) {
+    pairs = custom;
+  }
+} catch (e) {}
+
+let ratings = {};
+try { ratings = JSON.parse(localStorage.getItem(KEY) || "{}"); } catch(e) { ratings = {}; }
+
+const list = document.getElementById("list");
+const doneEl = document.getElementById("done");
+const totalEl = document.getElementById("total-count");
+
+function bandColor(p) {
+  if (p.score >= 0.88) return "#6366f1";
+  if (p.score >= 0.78) return "#10b981";
+  if (p.score >= 0.68) return "#f59e0b";
+  return "#ef4444";
+}
+
+function ratingColor(v) {
+  if (v <= 3) return "var(--bad)";
+  if (v <= 7) return "var(--mid)";
+  return "var(--good)";
+}
+
+function updateDone() {
+  doneEl.textContent = Object.keys(ratings).length;
+  totalEl.textContent = pairs.length;
+}
+
+function renderList() {
+  list.innerHTML = "";
+  pairs.forEach((p, i) => {
+    const card = document.createElement("div");
+    card.className = "card";
+    card.style.borderLeftColor = bandColor(p);
+    const scale = Array.from({length: 11}, (_, v) =>
+      `<button data-i="${i}" data-v="${v}">${v}</button>`).join("");
+    card.innerHTML = `
+      <div class="pair">${esc(p.left)}<span class="arrow">↔</span>${esc(p.right)}</div>
+      <div class="meta">
+        <span class="badge">Engine-Score: ${(p.score || 0).toFixed(3)}</span>
+        <span class="badge">Vokal: ${p.vowel || "-"}</span>
+        <span class="badge">Silben: ${p.left_syl || "?"} ↔ ${p.right_syl || "?"}</span>
+        <span class="badge">${esc(p.source_title || "Lokal")}</span>
+      </div>
+      <div class="scale"><span class="lab">Bewertung:</span>${scale}</div>
+      <textarea class="cmt" data-ci="${i}" placeholder="Künstlerische Anmerkung (z. B. Binnenreim trägt, Betonung bricht, Flow-Tipp)..."></textarea>`;
+    list.appendChild(card);
+
+    const buttons = card.querySelectorAll(".scale button");
+    function paint() {
+      const r = ratings[i];
+      buttons.forEach(b => {
+        const v = +b.dataset.v;
+        b.classList.toggle("sel", r && r.rating === v);
+        b.style.background = (r && r.rating === v) ? ratingColor(v) : "#1b212c";
+      });
+      card.classList.toggle("rated", !!r);
+    }
+
+    buttons.forEach(b => b.addEventListener("click", () => {
+      const v = +b.dataset.v;
+      const cmt = card.querySelector(".cmt").value.trim();
+      ratings[i] = {
+        rating: v,
+        comment: cmt,
+        left: p.left,
+        right: p.right,
+        engine_score: p.score,
+        query: p.left,
+        phrase: p.right,
+        source_title: p.source_title,
+        timestamp: new Date().toISOString()
+      };
+      localStorage.setItem(KEY, JSON.stringify(ratings));
+      paint();
+      updateDone();
+    }));
+
+    const ta = card.querySelector(".cmt");
+    if (ratings[i]) ta.value = ratings[i].comment || "";
+    ta.addEventListener("input", () => {
+      if (ratings[i]) {
+        ratings[i].comment = ta.value.trim();
+        localStorage.setItem(KEY, JSON.stringify(ratings));
+      }
+    });
+    paint();
+  });
+  updateDone();
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// Live Tester
+document.getElementById("live-add-btn").addEventListener("click", () => {
+  const left = document.getElementById("live-left").value.trim();
+  const right = document.getElementById("live-right").value.trim();
+  if (!left || !right) {
+    alert("Bitte zwei Wörter oder Zeilen eingeben.");
+    return;
+  }
+  const newPair = {
+    left,
+    right,
+    left_syl: left.split(" ").length * 2,
+    right_syl: right.split(" ").length * 2,
+    score: 0.850,
+    anchor: 0.85,
+    tail: 0.85,
+    vowel: 0.85,
+    cadence: 0.85,
+    band: "Live",
+    query: left,
+    source_title: "Spontane Eingabe",
+    line_no: 1,
+    phrase: right
+  };
+  pairs.unshift(newPair);
+  localStorage.setItem(PAIRS_KEY, JSON.stringify(pairs));
+  document.getElementById("live-left").value = "";
+  document.getElementById("live-right").value = "";
+  renderList();
+  window.scrollTo({ top: 120, behavior: "smooth" });
+});
+
+document.getElementById("exportBtn").addEventListener("click", () => {
+  const out = Object.values(ratings);
+  if (out.length === 0) {
+    alert("Noch keine Paare bewertet. Klicke auf eine Zahl von 0 bis 10 bei einem Reimpaar.");
+    return;
+  }
+  const blob = new Blob([JSON.stringify(out, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `reimwerk_trainer_feedback_${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+});
+
+document.getElementById("resetBtn").addEventListener("click", () => {
+  if (confirm("Alle Bewertungen und benutzerdefinierten Paare zurücksetzen?")) {
+    ratings = {};
+    pairs = [...INITIAL_PAIRS];
+    localStorage.removeItem(KEY);
+    localStorage.removeItem(PAIRS_KEY);
+    renderList();
+  }
+});
+
+renderList();
+</script>
+</body>
+</html>
